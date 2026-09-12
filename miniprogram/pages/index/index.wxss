@@ -1,0 +1,137 @@
+.hero {
+  background: linear-gradient(135deg, #eef3ef 0%, #f7f5f2 100%);
+}
+
+.hero-title {
+  font-size: 40rpx;
+  font-weight: 700;
+  letter-spacing: 1rpx;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8rpx;
+}
+
+.status-dot {
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+}
+
+.status-dot.ok {
+  background: #6b8e7f;
+}
+
+.status-dot.down {
+  background: #c2604f;
+}
+
+.meta-line {
+  flex-wrap: wrap;
+}
+
+.m-l {
+  margin-left: 24rpx;
+}
+
+.tip {
+  margin-top: 16rpx;
+  color: #c2604f;
+}
+
+.strong {
+  color: #2f2c29;
+  font-weight: 600;
+}
+
+.crisis-card {
+  border-left: 8rpx solid #c2604f;
+}
+
+.hotline-list {
+  margin-top: 16rpx;
+}
+
+.hotline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18rpx 0;
+  border-top: 1rpx solid var(--line);
+}
+
+.hotline-main {
+  display: flex;
+  align-items: baseline;
+  gap: 16rpx;
+}
+
+.hotline-name {
+  font-size: 28rpx;
+}
+
+.hotline-num {
+  font-size: 32rpx;
+  font-weight: 600;
+  color: #c2604f;
+  letter-spacing: 1rpx;
+}
+
+.hotline-call {
+  font-size: 26rpx;
+  color: var(--brand);
+  background: var(--brand-soft);
+  padding: 8rpx 24rpx;
+  border-radius: 24rpx;
+}
+
+.entry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20rpx;
+  margin-top: 8rpx;
+}
+
+.entry {
+  background: #faf8f6;
+  border-radius: 20rpx;
+  padding: 24rpx;
+}
+
+.entry:active {
+  background: #f2efeb;
+}
+
+.entry-icon {
+  font-size: 40rpx;
+}
+
+.entry-name {
+  font-size: 30rpx;
+  font-weight: 600;
+  margin: 8rpx 0 4rpx;
+}
+
+.entry .muted {
+  font-size: 23rpx;
+  line-height: 1.5;
+}
+
+.input {
+  margin-top: 16rpx;
+  background: #faf8f6;
+  border-radius: 16rpx;
+  padding: 20rpx 24rpx;
+  font-size: 28rpx;
+}
+
+.m-t {
+  margin-top: 20rpx;
+}
+
+.footer {
+  text-align: center;
+  padding: 20rpx 0 0;
+}

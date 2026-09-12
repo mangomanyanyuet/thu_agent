@@ -1,0 +1,259 @@
+.chat-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+}
+
+/* ---------------- 顶部状态条 ---------------- */
+.statusbar {
+  padding: 16rpx 24rpx;
+  background: #fff;
+  border-bottom: 1rpx solid var(--line);
+}
+
+.m-l-s {
+  margin-left: 12rpx;
+}
+
+.degraded {
+  margin-top: 10rpx;
+  font-size: 24rpx;
+  color: var(--warn);
+  background: var(--warn-soft);
+  padding: 8rpx 16rpx;
+  border-radius: 12rpx;
+}
+
+/* ---------------- 消息区 ---------------- */
+.msgs {
+  flex: 1;
+  overflow: hidden;
+}
+
+.msgs-inner {
+  padding: 24rpx;
+}
+
+.hint {
+  text-align: center;
+  padding: 16rpx 32rpx 32rpx;
+  line-height: 1.6;
+}
+
+.msg-row {
+  display: flex;
+  margin-bottom: 28rpx;
+}
+
+.msg-row.user {
+  justify-content: flex-end;
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 22rpx 26rpx;
+  border-radius: 24rpx;
+  font-size: 30rpx;
+  line-height: 1.65;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.bubble.agent {
+  background: #fff;
+  border-top-left-radius: 8rpx;
+  box-shadow: 0 2rpx 12rpx rgba(47, 44, 41, 0.05);
+}
+
+.bubble.user {
+  background: var(--brand);
+  color: #fff;
+  border-top-right-radius: 8rpx;
+}
+
+.bubble.typing {
+  color: var(--ink-3);
+}
+
+.meta {
+  margin-top: 14rpx;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ---------------- 三通道证据 ---------------- */
+.evidence {
+  margin-top: 16rpx;
+  background: #faf8f6;
+  border-radius: 16rpx;
+  padding: 16rpx 20rpx;
+}
+
+.evidence-head {
+  display: flex;
+  justify-content: space-between;
+}
+
+.evidence-body {
+  margin-top: 12rpx;
+}
+
+.ch-row {
+  padding: 10rpx 0;
+  border-top: 1rpx solid var(--line);
+}
+
+.ch-row:first-child {
+  border-top: none;
+}
+
+.ch-name {
+  font-size: 26rpx;
+  color: var(--ink-2);
+}
+
+.ch-ev {
+  margin-top: 6rpx;
+  line-height: 1.5;
+}
+
+/* ---------------- 热线卡片 ---------------- */
+.hotline-box {
+  margin-top: 16rpx;
+  background: var(--danger-soft);
+  border-radius: 16rpx;
+  padding: 18rpx 20rpx;
+}
+
+.hotline-box-title {
+  font-size: 26rpx;
+  font-weight: 600;
+  color: var(--danger);
+  margin-bottom: 8rpx;
+}
+
+.hotline-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 10rpx 0;
+  font-size: 27rpx;
+}
+
+.hotline-num {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* ---------------- 挂起提示 ---------------- */
+.suspended {
+  background: var(--danger-soft);
+  border-radius: 20rpx;
+  padding: 24rpx;
+  margin-bottom: 28rpx;
+}
+
+.suspended-title {
+  font-weight: 600;
+  color: var(--danger);
+  margin-bottom: 6rpx;
+}
+
+/* ---------------- 输入区 ---------------- */
+.composer {
+  padding: 16rpx 24rpx calc(20rpx + env(safe-area-inset-bottom));
+  background: #fff;
+  border-top: 1rpx solid var(--line);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 16rpx;
+}
+
+.input {
+  flex: 1;
+  background: #f5f2ee;
+  border-radius: 40rpx;
+  padding: 18rpx 28rpx;
+  font-size: 29rpx;
+  min-height: 44rpx;
+}
+
+.ph {
+  color: #b5aea5;
+}
+
+.send-btn {
+  background: var(--brand);
+  color: #fff;
+  font-size: 28rpx;
+  padding: 18rpx 34rpx;
+  border-radius: 40rpx;
+}
+
+.mic-btn {
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 28rpx;
+  padding: 18rpx 30rpx;
+  border-radius: 40rpx;
+  white-space: nowrap;
+}
+
+.mic-btn.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+.composer-tip {
+  margin-top: 12rpx;
+  font-size: 22rpx;
+  text-align: center;
+}
+
+.recording-bar {
+  display: flex;
+  align-items: center;
+  gap: 14rpx;
+  padding: 10rpx 4rpx 18rpx;
+}
+
+.rec-dot {
+  width: 16rpx;
+  height: 16rpx;
+  border-radius: 50%;
+  background: var(--danger);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.volume {
+  flex: 1;
+  height: 8rpx;
+  background: var(--line);
+  border-radius: 4rpx;
+  overflow: hidden;
+}
+
+.volume-fill {
+  height: 100%;
+  background: var(--brand);
+  transition: width 0.12s linear;
+}
+
+.rec-cancel {
+  font-size: 26rpx;
+  color: var(--ink-3);
+  padding: 4rpx 8rpx;
+}
+
+.anchor {
+  height: 1rpx;
+}

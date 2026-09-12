@@ -1,0 +1,58 @@
+.item {
+  border-left: 8rpx solid var(--warn);
+}
+
+.ev-title {
+  font-size: 24rpx;
+  color: var(--ink-3);
+}
+
+.ev-body {
+  margin-top: 6rpx;
+  background: #faf8f6;
+  border-radius: 12rpx;
+  padding: 16rpx 20rpx;
+  font-size: 27rpx;
+  line-height: 1.55;
+}
+
+.edit-box {
+  margin-top: 20rpx;
+}
+
+.textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: #faf8f6;
+  border-radius: 16rpx;
+  padding: 20rpx;
+  font-size: 28rpx;
+  line-height: 1.6;
+  min-height: 160rpx;
+}
+
+.row.gap {
+  gap: 16rpx;
+}
+
+.flex1 {
+  flex: 1;
+}
+
+.empty {
+  text-align: center;
+  padding: 48rpx 28rpx;
+}
+
+.m-t {
+  margin-top: 20rpx;
+}
+
+.m-t-s {
+  margin-top: 12rpx;
+}
+
+.strong {
+  font-weight: 600;
+  color: var(--ink);
+}

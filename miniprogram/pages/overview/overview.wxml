@@ -1,0 +1,84 @@
+<view class="page">
+  <!-- 长期画像（事实型记忆） -->
+  <view class="card">
+    <view class="card-title">我的画像</view>
+    <view wx:if="{{profileRendered}}" class="body-text">{{profileRendered}}</view>
+    <view wx:else class="muted">还没有足够的对话来形成画像。多聊几次后，这里会沉淀出你的触发源、应对方式与偏好。</view>
+    <view class="divider"></view>
+    <view class="muted">画像由对话自动抽取生成，你可以随时清空（设置页）。</view>
+    <button class="btn btn-ghost btn-block m-t" size="mini" bindtap="clearProfile">清空我的画像</button>
+  </view>
+
+  <!-- 量表趋势 -->
+  <view class="card">
+    <view class="card-title">量表趋势</view>
+    <view class="muted">连续趋势比单次分数更能反映真实变化。</view>
+
+    <view class="chart-block" wx:for="{{chartSeries}}" wx:key="name">
+      <view class="row-between">
+        <text class="chart-name">{{item.name}}</text>
+        <text class="muted">{{item.points.length}} 次记录</text>
+      </view>
+      <canvas type="2d" id="chart-{{index}}" class="chart" data-index="{{index}}"></canvas>
+      <view class="chart-foot muted">
+        <text wx:if="{{item.last}}">最近 {{item.last}} 分 · {{item.lastSeverity}}</text>
+        <text wx:else class="muted">暂无记录</text>
+      </view>
+    </view>
+
+    <view wx:if="{{!chartSeries.length}}" class="muted">还没有量表记录。</view>
+  </view>
+
+  <!-- 风险事件（不可压缩区） -->
+  <view class="card">
+    <view class="card-title">
+      <text>风险记录</text>
+      <text class="muted">{{riskFlags.length}} 条</text>
+    </view>
+    <view class="muted">这些记录永不压缩、永不摘要，每一轮对话都会强制回注。</view>
+
+    <view wx:for="{{riskFlags}}" wx:key="id" class="flag">
+      <view class="row-between">
+        <text class="tag {{item.cls}}">{{item.levelText}}</text>
+        <text class="muted">{{item.sourceText}} · {{item.timeText}}</text>
+      </view>
+      <view class="flag-ev">{{item.evidence}}</view>
+      <view wx:if="{{item.handled}}" class="muted">已处理：{{item.handled_by}}</view>
+    </view>
+
+    <view wx:if="{{!riskFlags.length}}" class="muted">暂无风险记录。</view>
+  </view>
+
+  <!-- 最近每日记录 -->
+  <view class="card">
+    <view class="card-title">
+      <text>最近记录</text>
+      <text class="muted">{{dailyRecords.length}} 条</text>
+    </view>
+    <view wx:for="{{dailyRecords}}" wx:key="id" class="record">
+      <view class="row-between">
+        <text class="record-date">{{item.date}}</text>
+        <text class="muted">{{item.riskText}}</text>
+      </view>
+      <view wx:if="{{item.narrative}}" class="record-text">{{item.narrative}}</view>
+      <view wx:if="{{item.modality_summary}}" class="muted">{{item.modality_summary}}</view>
+    </view>
+    <view wx:if="{{!dailyRecords.length}}" class="muted">还没有每日记录。可在对话中用语音描述你的状态。</view>
+  </view>
+
+  <!-- 热线：常驻 -->
+  <view class="card">
+    <view class="card-title">求助渠道</view>
+    <view
+      wx:for="{{hotlines}}"
+      wx:for-item="hotline"
+      wx:key="number"
+      class="hotline-line"
+      bindtap="callHotline"
+      data-number="{{hotline.number}}"
+    >
+      <text>{{hotline.name}}</text>
+      <text class="hotline-num">{{hotline.number}} ›</text>
+    </view>
+  </view>
+</view>

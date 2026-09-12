@@ -1,0 +1,88 @@
+<view class="page">
+  <!-- 顶部：品牌 + 服务状态 -->
+  <view class="card hero">
+    <view class="row-between">
+      <view>
+        <view class="hero-title">心迹 MindTrace</view>
+        <view class="muted">AI 情绪陪伴 · 技术演示</view>
+      </view>
+      <view class="status" bindtap="refreshStatus">
+        <view class="status-dot {{online ? 'ok' : 'down'}}"></view>
+        <text class="muted">{{online ? '服务正常' : '未连接'}}</text>
+      </view>
+    </view>
+    <view class="divider"></view>
+    <view class="row meta-line">
+      <text class="muted">模型：</text><text class="body-text">{{providerText}}</text>
+      <text class="muted m-l">语音：</text><text class="body-text">{{asrText}}</text>
+    </view>
+    <view wx:if="{{!online}}" class="muted tip">
+      后端未连接。请在下方「服务地址」中填写已启动的后端地址。
+    </view>
+  </view>
+
+  <!-- 免责声明 -->
+  <view class="card">
+    <view class="card-title">开始之前</view>
+    <view class="body-text">{{disclaimer}}</view>
+    <view class="divider"></view>
+    <view class="body-text">
+      本 Demo 用于验证「微信小程序 + 多模态心理 Agent」的技术可行性，
+      <text class="strong">不提供医疗诊断</text>，也不替代专业治疗。
+    </view>
+  </view>
+
+  <!-- 危机热线：常驻可见，不做折叠隐藏 -->
+  <view class="card crisis-card">
+    <view class="card-title">
+      <text>需要立刻帮助？</text>
+    </view>
+    <view class="muted">如果现在有伤害自己的念头，请立即联系下面任意一个渠道。</view>
+    <view class="hotline-list">
+      <view class="hotline" wx:for="{{hotlines}}" wx:key="number" bindtap="callHotline" data-number="{{item.number}}">
+        <view class="hotline-main">
+          <text class="hotline-name">{{item.name}}</text>
+          <text class="hotline-num">{{item.number}}</text>
+        </view>
+        <view class="hotline-call">拨打</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 功能入口 -->
+  <view class="card">
+    <view class="card-title">功能</view>
+    <view class="entry-grid">
+      <view class="entry" bindtap="goChat">
+        <view class="entry-icon">💬</view>
+        <view class="entry-name">陪伴对话</view>
+        <view class="muted">语音 / 文字 · 情绪识别与风险分级</view>
+      </view>
+      <view class="entry" bindtap="goScale">
+        <view class="entry-icon">📋</view>
+        <view class="entry-name">心理量表</view>
+        <view class="muted">PHQ-9 / GAD-7 · 计分与趋势</view>
+      </view>
+      <view class="entry" bindtap="goOverview">
+        <view class="entry-icon">📈</view>
+        <view class="entry-name">我的趋势</view>
+        <view class="muted">画像 · 量表轨迹 · 风险记录</view>
+      </view>
+      <view class="entry" bindtap="goReview">
+        <view class="entry-icon">🛡️</view>
+        <view class="entry-name">人工审核台</view>
+        <view class="muted">高风险会话放行 / 改写</view>
+      </view>
+    </view>
+  </view>
+
+  <!-- 服务地址 -->
+  <view class="card">
+    <view class="card-title">服务地址</view>
+    <view class="muted">小程序要求 HTTPS + 已备案域名；开发阶段可勾选「不校验合法域名」用内网地址调试。</view>
+    <input class="input" value="{{apiBase}}" placeholder="https://your-domain.com" bindinput="onBaseInput" />
+    <button class="btn btn-ghost btn-block m-t" bindtap="saveBase">保存并重新连接</button>
+  </view>
+
+  <view class="footer muted">v0.1.0 · 技术演示，非医疗产品</view>
+</view>

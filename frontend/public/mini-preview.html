@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>小程序预览 · 心迹 MindTrace</title>
+<style>
+  :root{
+    --bg:#f7f5f2; --card:#fff; --ink:#2f2c29; --ink2:#6b665f; --ink3:#9a938b;
+    --line:#ece7e1; --brand:#6b8e7f; --brand-soft:#e8f0ec;
+    --warn:#d99a4e; --warn-soft:#fbf0e0; --danger:#c2604f; --danger-soft:#fbeae7;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:#1c1a18; color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+    min-height:100vh; padding:24px 16px 48px;
+  }
+  h1{color:#fff;font-size:19px;font-weight:600;margin-bottom:6px}
+  .sub{color:#8d857c;font-size:13px;margin-bottom:20px}
+  .sub b{color:#a8d5c2;font-weight:600}
+
+  /* ---------- 手机外壳 ---------- */
+  .phone{
+    width:390px; height:844px; background:#000; border-radius:52px;
+    padding:11px; box-shadow:0 24px 70px rgba(0,0,0,.6);
+    position:relative; flex-shrink:0;
+  }
+  .phone::before{ /* 灵动岛 */
+    content:''; position:absolute; top:20px; left:50%; transform:translateX(-50%);
+    width:106px; height:30px; background:#000; border-radius:16px; z-index:30;
+  }
+  .screen{
+    width:100%; height:100%; background:var(--bg); border-radius:42px;
+    overflow:hidden; display:flex; flex-direction:column; position:relative;
+  }
+  /* 状态栏 */
+  .statusbar{
+    height:52px; flex-shrink:0; display:flex; align-items:flex-end; justify-content:space-between;
+    padding:0 26px 8px; font-size:13px; font-weight:600; background:var(--card);
+  }
+  /* 小程序导航栏 */
+  .navbar{
+    height:44px; flex-shrink:0; display:flex; align-items:center; justify-content:center;
+    background:var(--card); border-bottom:1px solid var(--line);
+    font-size:16px; font-weight:600; position:relative;
+  }
+  .navbar .back{position:absolute;left:16px;font-size:20px;color:var(--ink2);cursor:pointer}
+  /* 页面容器 */
+  .body{flex:1; overflow-y:auto; -webkit-overflow-scrolling:touch}
+  .body::-webkit-scrollbar{width:0}
+  .page-el{padding:12px}
+  /* tabBar */
+  .tabbar{
+    height:56px; flex-shrink:0; display:flex; background:#fff;
+    border-top:1px solid var(--line); padding-bottom:6px;
+  }
+  .tabbar div{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:2px; font-size:11px; color:var(--ink3); cursor:pointer; transition:.15s;
+  }
+  .tabbar div.on{color:var(--brand); font-weight:600}
+  .tabbar .ico{font-size:19px; line-height:1}
+
+  /* ---------- 组件 ---------- */
+  .card{background:var(--card); border-radius:12px; padding:14px; margin-bottom:12px;
+        box-shadow:0 1px 8px rgba(47,44,41,.04)}
+  .ct{font-size:16px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
+  .muted{color:var(--ink3);font-size:12px}
+  .body-t{color:var(--ink2);font-size:13px}
+  .divider{height:1px;background:var(--line);margin:10px 0}
+  .row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .between{display:flex;align-items:center;justify-content:space-between}
+  .tag{display:inline-block;padding:2px 9px;border-radius:11px;font-size:11px;line-height:1.6}
+  .tag-none{background:var(--brand-soft);color:var(--brand)}
+  .tag-low{background:#eef1f6;color:#6b7a90}
+  .tag-moderate{background:var(--warn-soft);color:var(--warn)}
+  .tag-high{background:var(--danger-soft);color:var(--danger)}
+  .tag-imminent{background:var(--danger);color:#fff}
+  .btn{border:none;border-radius:22px;font-size:14px;padding:0 18px;height:42px;
+       display:flex;align-items:center;justify-content:center;cursor:pointer;width:100%;font-family:inherit}
+  .btn-primary{background:var(--brand);color:#fff}
+  .btn-ghost{background:var(--brand-soft);color:var(--brand)}
+  .btn-danger{background:var(--danger-soft);color:var(--danger)}
+  .mt{margin-top:12px}
+  .mts{margin-top:6px}
+
+  /* 首页 */
+  .hero{background:linear-gradient(135deg,#eef3ef 0%,#f7f5f2 100%)}
+  .hero-t{font-size:20px;font-weight:700}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+  .dot.ok{background:var(--brand)} .dot.down{background:var(--danger)}
+  .crisis{border-left:4px solid var(--danger)}
+  .hl{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--line)}
+  .hl-n{font-size:16px;font-weight:600;color:var(--danger);letter-spacing:.5px}
+  .hl-c{font-size:12px;color:var(--brand);background:var(--brand-soft);padding:4px 12px;border-radius:12px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+  .entry{background:#faf8f6;border-radius:10px;padding:12px;cursor:pointer;transition:.15s}
+  .entry:hover{background:#f2efeb}
+  .entry .i{font-size:20px}
+  .entry .n{font-size:14px;font-weight:600;margin:4px 0 2px}
+  .entry .muted{font-size:11px;line-height:1.45}
+
+  /* 聊天 */
+  .chat-body{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column}
+  .chat-body::-webkit-scrollbar{width:0}
+  .bubble{max-width:76%;padding:11px 13px;border-radius:12px;font-size:14px;line-height:1.65;
+          white-space:pre-wrap;word-break:break-word}
+  .bubble.agent{background:#fff;align-self:flex-start;border-top-left-radius:4px;
+                box-shadow:0 1px 6px rgba(47,44,41,.05)}
+  .bubble.user{background:var(--brand);color:#fff;align-self:flex-end;border-top-right-radius:4px}
+  .bubble-wrap{display:flex;margin-bottom:14px}
+  .bubble-wrap.user{justify-content:flex-end}
+  .bubble-wrap.agent{justify-content:flex-start}
+  .meta{margin-top:7px;display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+  .ev{margin-top:8px;background:#faf8f6;border-radius:8px;padding:8px 10px}
+  .ev-h{display:flex;justify-content:space-between;font-size:12px}
+  .ch{padding:5px 0;border-top:1px solid var(--line);margin-top:5px}
+  .ch:first-of-type{border-top:none;margin-top:0}
+  .ch-e{font-size:11px;color:var(--ink3);margin-top:3px;line-height:1.5}
+  .hot{background:var(--danger-soft);border-radius:8px;padding:9px 10px;margin-top:8px}
+  .hot-t{font-size:12px;font-weight:600;color:var(--danger);margin-bottom:4px}
+  .hot-l{display:flex;justify-content:space-between;padding:5px 0;font-size:13px}
+  .hot-n{color:var(--danger);font-weight:600}
+  .susp{background:var(--danger-soft);border-radius:10px;padding:12px;margin-bottom:14px}
+  .susp-t{font-weight:600;color:var(--danger);font-size:13px;margin-bottom:3px}
+  .composer{flex-shrink:0;padding:8px 12px calc(10px + 8px);background:#fff;border-top:1px solid var(--line)}
+  .comp-row{display:flex;gap:8px;align-items:center}
+  .comp-row input{flex:1;background:#f5f2ee;border-radius:20px;border:none;padding:9px 14px;
+                  font-size:14px;font-family:inherit;outline:none}
+  .comp-row .s{background:var(--brand);color:#fff;font-size:13px;padding:9px 17px;border-radius:20px;
+               cursor:pointer;border:none;font-family:inherit}
+  .comp-row .m{background:var(--brand-soft);color:var(--brand);font-size:13px;padding:9px 15px;
+               border-radius:20px;cursor:pointer;border:none;font-family:inherit}
+
+  /* 量表 */
+  .tabs{display:flex;gap:8px;margin-bottom:12px}
+  .tabs div{flex:1;text-align:center;padding:8px 0;border-radius:16px;background:#fff;
+            color:var(--ink2);font-size:13px;cursor:pointer}
+  .tabs div.on{background:var(--brand);color:#fff;font-weight:600}
+  .q{padding:12px 0;border-bottom:1px solid var(--line)}
+  .q:last-child{border-bottom:none}
+  .q-t{display:flex;gap:7px;margin-bottom:8px}
+  .q-no{flex-shrink:0;width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;
+        background:var(--brand-soft);color:var(--brand);font-size:11px}
+  .q-x{flex:1;font-size:13px;line-height:1.5}
+  .opts{display:flex;gap:5px}
+  .opts div{flex:1;text-align:center;padding:8px 2px;border-radius:8px;background:#faf8f6;
+            color:var(--ink2);font-size:11px;cursor:pointer;line-height:1.3;transition:.12s}
+  .opts div.on{background:var(--brand);color:#fff}
+  .score-row{display:flex;align-items:baseline;gap:12px;margin-top:6px}
+  .score-n{font-size:44px;font-weight:700;color:var(--brand);line-height:1}
+  .score-s{font-size:17px;font-weight:600}
+  .risk-box{margin-top:12px;background:var(--danger-soft);border-radius:8px;padding:12px}
+
+  /* 我的 */
+  .chart{width:100%;height:110px;margin-top:6px;display:block}
+  .flag{padding:10px 0;border-top:1px solid var(--line)}
+  .flag-e{margin-top:5px;font-size:13px;line-height:1.55;color:var(--ink2)}
+  .rec{padding:10px 0;border-top:1px solid var(--line)}
+  .ll{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line);font-size:13px}
+
+  /* 审核台 */
+  .item{border-left:4px solid var(--warn);margin-bottom:12px}
+  .ev-b{margin-top:4px;background:#faf8f6;border-radius:6px;padding:8px 10px;font-size:13px;line-height:1.55}
+  .empty{text-align:center;padding:24px 14px}
+
+  .loading{text-align:center;color:var(--ink3);font-size:12px;padding:20px}
+  .toast{position:absolute;bottom:80px;left:50%;transform:translateX(-50%);
+         background:rgba(0,0,0,.8);color:#fff;padding:9px 18px;border-radius:8px;font-size:13px;
+         z-index:50;opacity:0;transition:.25s;pointer-events:none;max-width:80%;text-align:center}
+  .toast.show{opacity:1}
+  .note{color:#8d857c;font-size:12px;max-width:390px;margin-top:20px;line-height:1.7}
+  .note code{background:#2a2724;padding:1px 5px;border-radius:4px;color:#a8d5c2}
+</style>
+</head>
+<body>
+
+<h1>小程序预览 · 心迹 MindTrace</h1>
+<p class="sub">在手机外壳中模拟微信小程序的真实界面，数据来自 <b>实时后端接口</b>（<code>/api/mini/*</code>）</p>
+
+<div class="phone">
+  <div class="screen">
+    <div class="statusbar"><span id="clock">9:41</span><span>5G &nbsp;100%</span></div>
+    <div class="navbar"><span id="navTitle">心迹 MindTrace</span><span class="back" id="navBack" style="display:none">‹</span></div>
+    <div id="viewport" style="flex:1;display:flex;flex-direction:column;overflow:hidden"></div>
+    <div class="tabbar" id="tabbar"></div>
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+
+<p class="note">
+  这是用 HTML 复刻的小程序界面，用于快速预览视觉与交互流程。<br>
+  真机效果请用微信开发者工具打开 <code>miniprogram/</code> 目录（AppID 选「测试号」）。<br>
+  聊天页为真实调用：输入「已经写好遗书了」可触发危机干预与会话挂起。
+</p>
+
+<script>
+/* ================= 与小程序 utils/format.js 对齐 ================= */
+const RISK_META = {
+  none:{label:'平稳',cls:'tag-none'}, low:{label:'轻度',cls:'tag-low'},
+  moderate:{label:'中度',cls:'tag-moderate'}, high:{label:'重度',cls:'tag-high'},
+  imminent:{label:'危急',cls:'tag-imminent'}
+}
+const LEVEL_NAMES = ['none','low','moderate','high','imminent']
+const EMOTION = {joy:'愉悦',calm:'平静',neutral:'中性',sadness:'低落',anxiety:'焦虑',
+                 anger:'愤怒',fear:'恐惧',shame:'羞耻/自责',numbness:'麻木'}
+const CBT = {none:'自由陪伴',affect_labeling:'情绪命名',situation:'情境澄清',
+             automatic_thought:'识别自动化思维',distortion:'认知歪曲分类',socratic:'苏格拉底提问',
+             alternative:'替代性想法',behavior:'行为激活',wrapup:'小结反馈'}
+const CH = {rule:'文本规则',model:'模型语义',multimodal:'语音/多模态',scale:'量表条目'}
+const SRC = {rule:'文本规则',model:'模型语义',multimodal:'多模态',scale_item:'量表条目'}
+const rm = l => RISK_META[l] || RISK_META.none
+const esc = s => String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+const shortTime = s => String(s||'').replace('T',' ').slice(5,16)
+
+/* ================= 状态 ================= */
+const S = {
+  page:'index', userId:'preview_'+Math.random().toString(36).slice(2,9),
+  boot:null, sessionId:null, msgs:[], draft:'', loading:false,
+  risk:'none', cbt:'', degraded:false, pending:false,
+  scales:{}, current:'PHQ-9', answers:[], result:null,
+  overview:null, reviews:[]
+}
+const WAIT = ['我在听…','让我想想怎么回应你…','嗯，我在整理你说的…']
+
+/* ================= API（同源，后端直接托管本文件） ================= */
+const api = {
+  async get(p){ const r=await fetch(p); if(!r.ok) throw new Error('HTTP '+r.status); return r.json() },
+  async post(p,d){ const r=await fetch(p,{method:'POST',headers:{'Content-Type':'application/json'},
+                   body:JSON.stringify(d)}); if(!r.ok) throw new Error('HTTP '+r.status); return r.json() },
+  boot(){ return this.get('/api/mini/bootstrap?user_id='+S.userId) },
+  chat(text){ return this.post('/api/mini/chat',{user_id:S.userId,session_id:S.sessionId,text}) },
+  scales(){ return this.get('/api/scales') },
+  submitScale(name,scores){ return this.post('/api/mini/scales',{user_id:S.userId,scale_name:name,item_scores:scores}) },
+  overview(){ return this.get('/api/mini/overview?user_id='+S.userId) },
+  reviews(){ return this.get('/api/mini/review/pending?min_level=1') },
+  handleFlag(id,note){ return this.post(`/api/risk/${id}/handle?reviewer=preview&note=${encodeURIComponent(note||'')}`) },
+  submitReview(sid,action,reply){ return this.post('/api/mini/review',{session_id:sid,action,reply:reply||'',reviewer:'preview'}) },
+  health(){ return this.get('/api/health') }
+}
+
+/* ================= 渲染 ================= */
+const vp = document.getElementById('viewport')
+const TABS = [
+  {k:'index',   ico:'🏠', name:'首页'},
+  {k:'chat',    ico:'💬', name:'聊聊'},
+  {k:'scale',   ico:'📋', name:'量表'},
+  {k:'overview',ico:'📈', name:'我的'},
+]
+const NAV = {index:'心迹 MindTrace', chat:'陪伴对话', scale:'心理量表', overview:'我的趋势', review:'人工审核台'}
+
+function toast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),2200) }
+
+function renderTabs(){
+  document.getElementById('tabbar').innerHTML = TABS.map(t=>
+    `<div class="${S.page===t.k?'on':''}" data-tab="${t.k}"><span class="ico">${t.ico}</span><span>${t.name}</span></div>`
+  ).join('')
+}
+function setPage(p){
+  S.page = p
+  document.getElementById('navTitle').textContent = NAV[p]||''
+  document.getElementById('navBack').style.display = (p==='review')?'block':'none'
+  renderTabs()
+  if(p==='chat' && !S.msgs.length){
+    S.msgs.push({role:'agent', text:'嗨，很高兴今天能和你聊聊。接下来你想说什么都可以，没有对错。今天整体感觉怎么样？'})
+  }
+  if(p==='scale' && !Object.keys(S.scales).length) loadScales()
+  if(p==='overview' && !S.overview) loadOverview()
+  if(p==='review') loadReviews()
+  draw()
+}
+
+function draw(){
+  const inChat = S.page==='chat'
+  vp.innerHTML = inChat
+    ? `<div class="chat-body" id="chatBody">${renderMsgs()}</div>${renderComposer()}`
+    : `<div class="body"><div class="page-el">${renderPage()}</div></div>`
+  bind()
+  if(inChat){ const b=document.getElementById('chatBody'); if(b) b.scrollTop=b.scrollHeight }
+  if(S.page==='overview') drawCharts()
+}
+
+/* ---------------- 首页 ---------------- */
+function renderIndex(){
+  const b = S.boot
+  const online = !!b
+  const hl = (b&&b.hotlines) || [{name:'全国心理援助热线',number:'12356'},{name:'医疗急救',number:'120'},{name:'报警求助',number:'110'}]
+  return `
+  <div class="card hero">
+    <div class="between">
+      <div><div class="hero-t">心迹 MindTrace</div><div class="muted">AI 情绪陪伴 · 技术演示</div></div>
+      <div class="row"><span class="dot ${online?'ok':'down'}"></span><span class="muted">${online?'服务正常':'未连接'}</span></div>
+    </div>
+    <div class="divider"></div>
+    <div class="row">
+      <span class="muted">模型：</span><span class="body-t">${esc((b&&b.llm_provider)||'-')}</span>
+      <span class="muted" style="margin-left:12px">语音：</span><span class="body-t">${b?(b.asr_available?'可用':'未安装'):'-'}</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="ct">开始之前</div>
+    <div class="body-t mts">${esc((b&&b.disclaimer)||'')}</div>
+    <div class="divider"></div>
+    <div class="body-t">本 Demo 用于验证「微信小程序 + 多模态心理 Agent」的技术可行性，<b>不提供医疗诊断</b>，也不替代专业治疗。</div>
+  </div>
+
+  <div class="card crisis">
+    <div class="ct">需要立刻帮助？</div>
+    <div class="muted mts">如果现在有伤害自己的念头，请立即联系下面任意一个渠道。</div>
+    ${hl.map(h=>`<div class="hl"><div><span>${esc(h.name)}</span> &nbsp;<span class="hl-n">${esc(h.number)}</span></div><span class="hl-c">拨打</span></div>`).join('')}
+  </div>
+
+  <div class="card">
+    <div class="ct">功能</div>
+    <div class="grid">
+      <div class="entry" data-go="chat"><div class="i">💬</div><div class="n">陪伴对话</div><div class="muted">语音 / 文字 · 情绪识别与风险分级</div></div>
+      <div class="entry" data-go="scale"><div class="i">📋</div><div class="n">心理量表</div><div class="muted">PHQ-9 / GAD-7 · 计分与趋势</div></div>
+      <div class="entry" data-go="overview"><div class="i">📈</div><div class="n">我的趋势</div><div class="muted">画像 · 量表轨迹 · 风险记录</div></div>
+      <div class="entry" data-go="review"><div class="i">🛡️</div><div class="n">人工审核台</div><div class="muted">高风险会话放行 / 改写</div></div>
+    </div>
+  </div>
+  <div class="muted" style="text-align:center;padding:6px 0 0">v0.1.0 · 技术演示，非医疗产品</div>`
+}
+
+/* ---------------- 聊天 ---------------- */
+function renderMsgs(){
+  let h = `<div class="muted" style="text-align:center;padding:6px 20px 18px;line-height:1.6">
+    这里是安全的。如果出现安全风险，我会立刻停止追问并转介给能帮助你的人。</div>`
+  S.msgs.forEach((m,i)=>{
+    const cls = m.role==='user' ? 'user' : 'agent'
+    let extra = ''
+    if(m.role==='agent'){
+      const metas = []
+      if(m.emotion) metas.push(`<span class="tag tag-none">情绪 · ${esc(m.emotion)}</span>`)
+      if(m.stage)   metas.push(`<span class="tag tag-none">${esc(m.stage)}</span>`)
+      if(m.latency) metas.push(`<span class="muted">${esc(m.latency)}</span>`)
+      if(metas.length) extra += `<div class="meta">${metas.join('')}</div>`
+
+      if(m.channelList && m.channelList.length){
+        const body = m.open ? m.channelList.map(c=>`
+          <div class="ch"><div class="between"><span class="body-t">${esc(c.label)}</span>
+          <span class="tag ${c.cls}">${esc(c.levelText)}</span></div>
+          ${c.evidence?`<div class="ch-e">${esc(c.evidence)}</div>`:''}</div>`).join('') : ''
+        extra += `<div class="ev"><div class="ev-h" data-ev="${i}">
+          <span class="muted">三通道检测</span><span class="muted">${m.open?'收起':'展开'}</span></div>${body}</div>`
+      }
+      if(m.hotlines && m.hotlines.length){
+        extra += `<div class="hot"><div class="hot-t">现在就能联系</div>
+          ${m.hotlines.map(x=>`<div class="hot-l"><span>${esc(x.name)}</span><span class="hot-n">${esc(x.number)} ›</span></div>`).join('')}</div>`
+      }
+    }
+    h += `<div class="bubble-wrap ${cls}"><div class="bubble ${cls}">${esc(m.text)}${extra}</div></div>`
+  })
+  if(S.loading) h += `<div class="bubble-wrap agent"><div class="bubble agent" style="color:var(--ink3)">${S.loadingText}</div></div>`
+  if(S.pending) h += `<div class="susp"><div class="susp-t">会话已挂起，等待人工审核</div>
+      <div class="muted">${esc(S.pendingReason||'')}</div>
+      <button class="btn btn-danger mt" data-go="review" style="height:34px;font-size:13px">去审核台处理</button></div>`
+  return h
+}
+function renderComposer(){
+  return `<div class="composer">
+    <div class="comp-row">
+      <input id="draft" placeholder="说点什么…（试试「最近压力大睡不着」）" value="${esc(S.draft)}" ${S.loading?'disabled':''}/>
+      ${S.draft ? `<button class="s" id="send">发送</button>` : `<button class="m" id="mic">按住说话</button>`}
+    </div>
+    <div class="muted" style="text-align:center;font-size:11px;margin-top:7px">
+      语音不留存原始音频，只提取声学特征用于情绪识别</div>
+  </div>`
+}
+
+/* ---------------- 量表 ---------------- */
+const OPTSETS = {3:['完全没有','有几天','一半以上天数','几乎每天'],4:['从不','很少','有时','经常','总是']}
+function renderScale(){
+  const meta = S.scales[S.current]
+  if(!meta) return '<div class="loading">加载量表…</div>'
+  const opts = OPTSETS[meta.max] || OPTSETS[3]
+  if(S.result) return renderScaleResult(meta)
+  const answered = S.answers.filter(x=>x>=0).length
+  const total = S.answers.reduce((s,x)=>s+(x>0?x:0),0)
+  return `
+  <div class="tabs">${Object.keys(S.scales).map(k=>
+    `<div class="${k===S.current?'on':''}" data-scale="${k}">${esc(k)}</div>`).join('')}</div>
+  <div class="card">
+    <div class="ct">${esc(meta.name)}</div>
+    <div class="muted mts">请回顾<b>过去两周</b>，选择最符合你情况的选项。</div>
+    ${meta.items.map((it,i)=>`
+      <div class="q">
+        <div class="q-t"><span class="q-no">${i+1}</span><span class="q-x">${esc(it)}</span></div>
+        <div class="opts">${opts.map((o,oi)=>
+          `<div class="${S.answers[i]===oi?'on':''}" data-q="${i}" data-v="${oi}">${o}</div>`).join('')}</div>
+      </div>`).join('')}
+    <div class="between mt">
+      <span class="muted">已答 ${answered} / ${meta.items.length}</span>
+      <span class="muted" data-clear style="cursor:pointer">清空</span>
+    </div>
+    <button class="btn btn-primary mt" id="submitScale" ${answered<meta.items.length?'disabled style="opacity:.45"':''}>提交（${total} 分）</button>
+    ${answered<meta.items.length?'<div class="muted mts" style="text-align:center">答完所有题目才能提交</div>':''}
+  </div>`
+}
+function renderScaleResult(meta){
+  const r = S.result, sc = r.score, lv = LEVEL_NAMES[r.risk_level]||'none'
+  const hl = (S.boot&&S.boot.hotlines)||[]
+  const d = v => v>0?`+${v}`:String(v)
+  const cl = v => v>0?'style="color:#c2604f"':(v<0?'style="color:#6b8e7f"':'')
+  return `
+  <div class="tabs">${Object.keys(S.scales).map(k=>
+    `<div class="${k===S.current?'on':''}" data-scale="${k}">${esc(k)}</div>`).join('')}</div>
+  <div class="card">
+    <div class="ct">${esc(meta.name)} 结果</div>
+    <div class="score-row"><span class="score-n">${sc.total_score}</span>
+      <span><span class="score-s">${esc(sc.severity)}</span><br><span class="muted">满分 ${meta.items.length*meta.max}</span></span></div>
+    <div class="divider"></div>
+    <div class="between"><span class="muted">较上次</span><span class="score-s" ${cl(sc.delta_vs_last)}>${d(sc.delta_vs_last)}</span></div>
+    <div class="between"><span class="muted">较基线</span><span class="score-s" ${cl(sc.delta_vs_baseline)}>${d(sc.delta_vs_baseline)}</span></div>
+    <div class="muted mts">趋势比单次绝对值更有参考意义：连续上升更值得关注。</div>
+    ${r.risk_level>0?`<div class="risk-box">
+      <div style="font-weight:600;color:#c2604f">已触发风险通道（${rm(lv).label}）</div>
+      <div class="body-t mts">${esc(r.risk_evidence||'')}</div>
+      <div class="muted mts">这条记录会进入风险事实库，并在后续每一轮对话中强制注入。</div>
+      ${hl.map(x=>`<div class="hot-l"><span>${esc(x.name)}</span><span class="hot-n">${esc(x.number)} ›</span></div>`).join('')}
+    </div>`:''}
+    <button class="btn btn-ghost mt" data-clear>再测一次</button>
+  </div>
+  <div class="card"><div class="ct">说明</div>
+    <div class="muted mts">量表结果只是筛查参考，不是诊断。它会被用于校准对话中的情绪判断，并与你的历史分数比较得出趋势。</div>
+  </div>`
+}
+
+/* ---------------- 我的 ---------------- */
+function renderOverview(){
+  const o = S.overview
+  if(!o) return '<div class="loading">加载中…</div>'
+  const series = [['PHQ-9'],['GAD-7']].map(([n])=>({name:n,rows:(o.scales[n]||[]).slice().sort((a,b)=>a.date>b.date?1:-1)}))
+  const flags = o.risk_flags||[]
+  const recs = o.daily_records||[]
+  return `
+  <div class="card">
+    <div class="ct">我的画像</div>
+    ${o.profile_rendered?`<div class="body-t mts">${esc(o.profile_rendered)}</div>`
+      :`<div class="muted mts">还没有足够的对话来形成画像。多聊几次后，这里会沉淀出你的触发源、应对方式与偏好。</div>`}
+    <div class="divider"></div>
+    <div class="muted">画像由对话自动抽取生成，你可以随时清空。</div>
+  </div>
+
+  <div class="card">
+    <div class="ct">量表趋势</div>
+    <div class="muted mts">连续趋势比单次分数更能反映真实变化。</div>
+    ${series.map((s,i)=>`
+      <div class="mt">
+        <div class="between"><span class="body-t" style="font-weight:600">${s.name}</span>
+          <span class="muted">${s.rows.length} 次记录</span></div>
+        <canvas class="chart" id="cv${i}"></canvas>
+        <div class="muted" style="text-align:right">${s.rows.length?`最近 ${s.rows[s.rows.length-1].total_score} 分 · ${esc(s.rows[s.rows.length-1].severity||'')}`:'暂无记录'}</div>
+      </div>`).join('')}
+  </div>
+
+  <div class="card">
+    <div class="ct"><span>风险记录</span><span class="muted">${flags.length} 条</span></div>
+    <div class="muted mts">这些记录永不压缩、永不摘要，每一轮对话都会强制回注。</div>
+    ${flags.length?flags.map(f=>`
+      <div class="flag">
+        <div class="between"><span class="tag ${rm(f.level).cls}">${rm(f.level).label}</span>
+          <span class="muted">${esc(SRC[f.source]||f.source)} · ${esc(shortTime(f.ts))}</span></div>
+        <div class="flag-e">${esc(f.evidence)}</div>
+        ${f.handled?`<div class="muted">已处理：${esc(f.handled_by||'')}</div>`:''}
+      </div>`).join(''):'<div class="muted mts">暂无风险记录。</div>'}
+  </div>
+
+  <div class="card">
+    <div class="ct"><span>最近记录</span><span class="muted">${recs.length} 条</span></div>
+    ${recs.length?recs.map(r=>`
+      <div class="rec">
+        <div class="between"><span style="font-weight:600">${esc(r.date)}</span>
+          <span class="muted">${r.narrative_analysis?'已分析':''}</span></div>
+        ${r.narrative?`<div class="flag-e">${esc(r.narrative)}</div>`:''}
+        ${r.modality_summary?`<div class="muted">${esc(r.modality_summary)}</div>`:''}
+      </div>`).join(''):'<div class="muted mts">还没有每日记录。</div>'}
+  </div>
+
+  <div class="card"><div class="ct">求助渠道</div>
+    ${(o.hotlines||[]).map(x=>`<div class="ll"><span>${esc(x.name)}</span><span class="hot-n">${esc(x.number)} ›</span></div>`).join('')}
+  </div>`
+}
+
+function drawCharts(){
+  const o = S.overview; if(!o) return
+  [['PHQ-9',0],['GAD-7',1]].forEach(([name,idx])=>{
+    const cv = document.getElementById('cv'+idx); if(!cv) return
+    const rows = (o.scales[name]||[]).slice().sort((a,b)=>a.date>b.date?1:-1)
+    const dpr = window.devicePixelRatio||2
+    const W = cv.clientWidth, H = 110
+    cv.width = W*dpr; cv.height = H*dpr
+    const g = cv.getContext('2d'); g.scale(dpr,dpr)
+    g.clearRect(0,0,W,H)
+    if(!rows.length){ g.fillStyle='#b5aea5'; g.font='11px sans-serif'; g.textAlign='center'
+      g.fillText('暂无数据', W/2, H/2); return }
+    const pad={l:24,r:8,t:10,b:18}
+    const maxY=Math.max(10,...rows.map(r=>r.total_score)), n=rows.length
+    const px=i=> n===1?pad.l+(W-pad.l-pad.r)/2 : pad.l+i*(W-pad.l-pad.r)/(n-1)
+    const py=v=> pad.t+(1-v/maxY)*(H-pad.t-pad.b)
+    g.strokeStyle='#ece7e1'; g.lineWidth=1; g.fillStyle='#b5aea5'; g.font='9px sans-serif'; g.textAlign='right'
+    for(let k=0;k<=2;k++){ const v=maxY*k/2, y=py(v)
+      g.beginPath(); g.moveTo(pad.l,y); g.lineTo(W-pad.r,y); g.stroke(); g.fillText(Math.round(v),pad.l-5,y+3) }
+    g.strokeStyle='#6b8e7f'; g.fillStyle='#6b8e7f'; g.lineWidth=2
+    if(n===1){ g.beginPath(); g.arc(px(0),py(rows[0].total_score),3.5,0,7); g.fill() }
+    else{
+      g.beginPath(); rows.forEach((r,i)=> i?g.lineTo(px(i),py(r.total_score)):g.moveTo(px(i),py(r.total_score))); g.stroke()
+      rows.forEach((r,i)=>{ g.beginPath(); g.arc(px(i),py(r.total_score),3,0,7); g.fill() })
+    }
+    g.fillStyle='#b5aea5'; g.textAlign='left'
+    g.fillText(String(rows[0].date).slice(5), pad.l, H-4)
+    if(n>1){ g.textAlign='right'; g.fillText(String(rows[n-1].date).slice(5), W-pad.r, H-4) }
+  })
+}
+
+/* ---------------- 审核台 ---------------- */
+function renderReview(){
+  if(S.reviews===null) return '<div class="loading">加载中…</div>'
+  if(!S.reviews.length) return `<div class="card empty">
+    <div class="muted">当前没有待处理的风险事件。</div>
+    <div class="muted mts">在「聊聊」里输入一句高危表达（如「已经写好遗书了」）可以快速触发。</div>
+    <button class="btn btn-ghost mt" data-reload>刷新</button></div>`
+  return `
+  <div class="card">
+    <div class="ct"><span>人工审核台</span><span class="muted" data-reload style="cursor:pointer">刷新</span></div>
+    <div class="muted mts">风险检测与对话生成在架构上是解耦的：检测通道发现 high 及以上风险时，
+      会话会被 <b>interrupt()</b> 挂起，由人来最终决定放行或改写。不做自动化闭环。</div>
+  </div>
+  ${S.reviews.map(f=>`
+    <div class="card item">
+      <div class="between"><span class="tag ${rm(f.level).cls}">${rm(f.level).label}</span>
+        <span class="muted">${esc(SRC[f.source]||f.source)} · ${esc(shortTime(f.ts))}</span></div>
+      <div class="muted mts">证据原文</div>
+      <div class="ev-b">${esc(f.evidence)}</div>
+      <div class="between mts"><span class="muted">会话 ${esc(String(f.session_id||'').slice(-8))}</span>
+        ${f.cssrs_dimension?`<span class="muted">${esc(f.cssrs_dimension)}</span>`:''}</div>
+      ${f.editing?`
+        <textarea data-draft="${f.id}" placeholder="改写要发给用户的话…"
+          style="width:100%;box-sizing:border-box;background:#faf8f6;border:none;border-radius:8px;
+          padding:10px;font-size:13px;font-family:inherit;min-height:80px;margin-top:10px;outline:none">${esc(f.draft||'')}</textarea>
+        <div class="row" style="gap:8px;margin-top:8px">
+          <button class="btn btn-ghost" style="flex:1;height:36px;font-size:13px" data-approve="${f.id}">确认放行原文</button>
+          <button class="btn btn-primary" style="flex:1;height:36px;font-size:13px" data-override="${f.id}">用改写内容</button>
+        </div>
+        <button class="btn btn-danger" style="height:36px;font-size:13px;margin-top:8px" data-mark="${f.id}">仅标记已处理</button>`
+      :`
+        <div class="row" style="gap:8px;margin-top:10px">
+          <button class="btn btn-ghost" style="flex:1;height:36px;font-size:13px" data-edit="${f.id}">处理</button>
+          <button class="btn btn-danger" style="flex:1;height:36px;font-size:13px" data-mark="${f.id}">标记已处理</button>
+        </div>`}
+    </div>`).join('')}`
+}
+
+function renderPage(){
+  switch(S.page){
+    case 'index': return renderIndex()
+    case 'scale': return renderScale()
+    case 'overview': return renderOverview()
+    case 'review': return renderReview()
+    default: return ''
+  }
+}
+
+/* ================= 交互 ================= */
+function bind(){
+  // tabBar
+  document.querySelectorAll('#tabbar [data-tab]').forEach(el=>
+    el.onclick = ()=>setPage(el.dataset.tab))
+  // 首页跳转
+  document.querySelectorAll('[data-go]').forEach(el=>
+    el.onclick = ()=>setPage(el.dataset.go))
+  // 导航返回
+  document.getElementById('navBack').onclick = ()=>setPage('index')
+  // 首页刷新
+  document.querySelectorAll('[data-reload]').forEach(el=>
+    el.onclick = ()=>loadReviews(true))
+
+  if(S.page==='chat'){
+    const input = document.getElementById('draft')
+    if(input){
+      input.oninput = e=>{ S.draft = e.target.value; if(!S.draft||e.target.value==='') drawIfChanged(input.value) }
+      input.onkeydown = e=>{ if(e.key==='Enter'){ const v=input.value.trim(); if(v){ S.draft=''; send(v) } } }
+    }
+    const sendBtn = document.getElementById('send')
+    if(sendBtn) sendBtn.onclick = ()=>{ const v=(input&&input.value||'').trim(); if(v){ S.draft=''; send(v) } }
+    const mic = document.getElementById('mic')
+    if(mic) mic.onclick = ()=>toast('语音输入需在微信开发者工具/真机中体验')
+    // 三通道展开
+    document.querySelectorAll('[data-ev]').forEach(el=>
+      el.onclick = ()=>{ const i=+el.dataset.ev; S.msgs[i].open=!S.msgs[i].open; draw() })
+  }
+
+  if(S.page==='scale'){
+    document.querySelectorAll('[data-scale]').forEach(el=>
+      el.onclick = ()=>{ S.current=el.dataset.scale; S.answers=new Array(S.scales[S.current].items.length).fill(-1); S.result=null; draw() })
+    document.querySelectorAll('[data-q]').forEach(el=>
+      el.onclick = ()=>{ S.answers[+el.dataset.q]=+el.dataset.v; draw() })
+    document.querySelectorAll('[data-clear]').forEach(el=>
+      el.onclick = ()=>{ S.answers=new Array(S.scales[S.current].items.length).fill(-1); S.result=null; draw() })
+    const sb = document.getElementById('submitScale')
+    if(sb) sb.onclick = ()=>{
+      if(S.answers.some(x=>x<0)) return toast('还有题目没答')
+      sb.disabled=true; sb.textContent='提交中…'
+      api.submitScale(S.current,S.answers).then(r=>{
+        S.result=r; draw()
+        if(r.risk_level>0) toast('已触发风险通道（'+rm(LEVEL_NAMES[r.risk_level]).label+'）')
+        loadOverview(true)
+      }).catch(e=>{ toast('提交失败'); draw() })
+    }
+  }
+
+  if(S.page==='review'){
+    document.querySelectorAll('[data-edit]').forEach(el=>
+      el.onclick = ()=>patchFlag(+el.dataset.edit,{editing:true,draft:''}))
+    document.querySelectorAll('[data-mark]').forEach(el=>
+      el.onclick = ()=>{
+        const id=+el.dataset.mark
+        api.handleFlag(id,'预览页标记').then(()=>{ toast('已标记'); loadReviews(true) })
+          .catch(()=>toast('操作失败'))
+      })
+    document.querySelectorAll('[data-approve]').forEach(el=>
+      el.onclick = ()=>submitReview(+el.dataset.approve,'approve',''))
+    document.querySelectorAll('[data-override]').forEach(el=>
+      el.onclick = ()=>{
+        const id=+el.dataset.override, f=S.reviews.find(x=>x.id===id)
+        const reply=(f&&f.draft||'').trim()
+        if(!reply) return toast('请先填写改写内容')
+        submitReview(id,'override',reply)
+      })
+    document.querySelectorAll('[data-draft]').forEach(el=>
+      el.oninput = e=>patchFlag(+el.dataset.draft,{draft:e.target.value},false))
+  }
+}
+
+let lastDraft=''
+function drawIfChanged(v){ if((v==='')!==(lastDraft==='')){ lastDraft=v; draw(); const i=document.getElementById('draft'); if(i){i.focus(); i.value=v} } }
+
+function patchFlag(id,ch,redraw=true){
+  S.reviews = S.reviews.map(f=>f.id===id?Object.assign({},f,ch):f)
+  if(redraw) draw()
+    else { const ta=document.querySelector(`[data-draft="${id}"]`); }
+}
+
+function submitReview(id,action,reply){
+  const f = S.reviews.find(x=>x.id===id); if(!f) return
+  if(!f.session_id || ['daily','scale'].includes(f.session_id)){
+    api.handleFlag(id,action+':'+reply).then(()=>{ toast('已处理'); loadReviews(true) })
+    return
+  }
+  toast('提交中…')
+  api.submitReview(f.session_id,action,reply)
+    .then(()=>api.handleFlag(id,action))
+    .then(()=>{ toast(action==='override'?'已改写放行':'已放行'); loadReviews(true) })
+    .catch(()=>toast('处理失败'))
+}
+
+/* ---------------- 数据加载 ---------------- */
+async function loadBoot(){
+  try{ S.boot = await api.boot() }
+  catch(e){ S.boot = null; toast('后端未连接，界面为离线示例') }
+  draw()
+}
+async function loadScales(){
+  try{
+    S.scales = await api.scales()
+    const keys = Object.keys(S.scales); S.current = keys[0]
+    S.answers = new Array(S.scales[S.current].items.length).fill(-1)
+  }catch(e){ toast('量表加载失败') }
+  draw()
+}
+async function loadOverview(force){
+  if(!force && S.overview) return
+  try{ S.overview = await api.overview() }catch(e){ toast('概览加载失败') }
+  if(S.page==='overview') draw()
+}
+async function loadReviews(force){
+  if(!force && S.reviews && S.reviews.length) { draw(); return }
+  S.reviews = null; draw()
+  try{ S.reviews = await api.reviews() }catch(e){ S.reviews = [] }
+  draw()
+}
+
+/* ---------------- 发送对话 ---------------- */
+let waitTimer=null
+async function send(text){
+  if(S.loading) return
+  S.msgs.push({role:'user',text}); S.loading=true; S.loadingText=WAIT[0]; draw()
+  let i=0
+  waitTimer=setInterval(()=>{ i=(i+1)%WAIT.length; S.loadingText=WAIT[i]
+    const b=document.querySelector('.bubble.agent:last-child'); if(b && S.loading) b.textContent=WAIT[i] },2200)
+  try{
+    const r = await api.chat(text)
+    if(r.session_id) S.sessionId = r.session_id
+    const crisis = r.crisis_mode || r.risk_level==='high' || r.risk_level==='imminent'
+    S.msgs.push({
+      role:'agent', text:r.reply||'', open:false,
+      emotion: EMOTION[r.emotion&&r.emotion.primary_emotion]||'',
+      stage: CBT[r.cbt_stage]||'',
+      latency: r.latency_ms? (r.latency_ms/1000).toFixed(1)+'s':'',
+      channelList: Object.keys(r.channels||{}).map(k=>{
+        const c=r.channels[k]||{}, lv=+c.level||0
+        const nm=LEVEL_NAMES[lv]
+        return {label:CH[k]||k, levelText:nm, cls:rm(nm).cls, evidence:c.evidence||''}
+      }),
+      hotlines: (crisis||r.risk_level==='moderate') ? (r.hotlines||[]) : []
+    })
+    S.risk=r.risk_level; S.cbt=r.cbt_stage; S.degraded=!!r.degraded
+    S.pending=!!r.interrupted; S.pendingReason=r.interrupt_reason||''
+    if(S.pending) loadReviews(true)
+  }catch(e){
+    S.msgs.push({role:'agent', text:'刚才网络不太稳，我没能接住你的话。你愿意再说一次吗？\n\n如果现在很难受，可以先拨打全国心理援助热线 12356。'})
+    toast('请求失败：'+e.message)
+  }finally{
+    clearInterval(waitTimer); S.loading=false; draw()
+  }
+}
+
+/* ---------------- 启动 ---------------- */
+renderTabs()
+setPage('index')
+loadBoot()
+setInterval(()=>{ const d=new Date()
+  document.getElementById('clock').textContent = d.getHours()+':'+String(d.getMinutes()).padStart(2,'0') },1000)
+</script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<view class="chat-root">
+  <!-- 顶部状态：风险等级 / CBT 阶段 / 降级提示 -->
+  <view class="statusbar">
+    <view class="row">
+      <text class="tag {{riskMeta.cls}}">风险 {{riskMeta.label}}</text>
+      <text wx:if="{{cbtStage}}" class="tag tag-none m-l-s">CBT · {{cbtStage}}</text>
+    </view>
+    <view wx:if="{{degraded}}" class="degraded">AI 服务降级中，回复为安全兜底话术</view>
+  </view>
+
+  <scroll-view class="msgs" scroll-y scroll-into-view="{{toView}}" scroll-with-animation>
+    <view class="msgs-inner">
+      <view class="hint muted">这里是安全的。你说的每一句话都会被认真对待；如果出现安全风险，我会立刻停止追问并转介给能帮助你的人。</view>
+
+      <view wx:for="{{messages}}" wx:key="id" id="m{{item.id}}" class="msg-row {{item.role}}">
+        <view class="bubble {{item.role}}">
+          <text class="bubble-text" user-select>{{item.text}}</text>
+
+          <!-- 助手消息的元信息：情绪 / 阶段 / 耗时 -->
+          <view wx:if="{{item.role === 'agent'}}" class="meta">
+            <text wx:if="{{item.emotion}}" class="tag tag-none">情绪 · {{item.emotion}}</text>
+            <text wx:if="{{item.stage}}" class="tag tag-none m-l-s">{{item.stage}}</text>
+            <text wx:if="{{item.latency}}" class="muted m-l-s">{{item.latency}}</text>
+          </view>
+
+          <!-- 三通道证据：这是「风险检测与对话生成解耦」的可视化，默认收起 -->
+          <view wx:if="{{item.channels && item.hasAnyChannel}}" class="evidence">
+            <view class="evidence-head" bindtap="toggleEvidence" data-id="{{item.id}}">
+              <text class="muted">三通道检测</text>
+              <text class="muted">{{item.evidenceOpen ? '收起' : '展开'}}</text>
+            </view>
+            <view wx:if="{{item.evidenceOpen}}" class="evidence-body">
+              <view wx:for="{{item.channelList}}" wx:for-item="ch" wx:key="key" class="ch-row">
+                <view class="row-between">
+                  <text class="ch-name">{{ch.label}}</text>
+                  <text class="tag {{ch.cls}}">{{ch.levelText}}</text>
+                </view>
+                <view wx:if="{{ch.evidence}}" class="ch-ev muted">{{ch.evidence}}</view>
+              </view>
+            </view>
+          </view>
+
+          <!-- 危机热线卡片：高危时强制展示，不可折叠 -->
+          <view wx:if="{{item.hotlines && item.hotlines.length}}" class="hotline-box">
+            <view class="hotline-box-title">现在就能联系</view>
+            <!-- 内层 wx:for 必须显式命名，否则默认的 item 会遮蔽外层消息对象 -->
+            <view
+              wx:for="{{item.hotlines}}"
+              wx:for-item="hotline"
+              wx:key="number"
+              class="hotline-line"
+              bindtap="callHotline"
+              data-number="{{hotline.number}}"
+            >
+              <text>{{hotline.name}}</text>
+              <text class="hotline-num">{{hotline.number}} ›</text>
+            </view>
+          </view>
+        </view>
+      </view>
+
+      <!-- 「等待中」气泡 -->
+      <view wx:if="{{loading}}" class="msg-row agent">
+        <view class="bubble agent typing">
+          <text>{{loadingText}}</text>
+        </view>
+      </view>
+
+      <!-- 挂起提示 -->
+      <view wx:if="{{pendingReview}}" class="suspended">
+        <view class="suspended-title">会话已挂起，等待人工审核</view>
+        <view class="muted">{{suspendedReason}}</view>
+        <button class="btn btn-danger m-t" size="mini" bindtap="goReview">去审核台处理</button>
+      </view>
+
+      <view class="anchor" id="anchor"></view>
+    </view>
+  </scroll-view>
+
+  <!-- 输入区 -->
+  <view class="composer">
+    <view wx:if="{{recording}}" class="recording-bar">
+      <view class="rec-dot"></view>
+      <text class="muted">正在聆听… {{recordSec}}s</text>
+      <view class="volume">
+        <view class="volume-fill" style="width: {{volume * 100}}%"></view>
+      </view>
+      <text class="rec-cancel" bindtap="cancelRecord">取消</text>
+    </view>
+
+    <view class="composer-row">
+      <input
+        class="input"
+        value="{{draft}}"
+        placeholder="{{recording ? '松开发送，或点上方取消' : '说点什么…'}}"
+        placeholder-class="ph"
+        confirm-type="send"
+        bindinput="onDraft"
+        bindconfirm="sendText"
+        disabled="{{loading || recording}}"
+        adjust-position="{{false}}"
+      />
+      <view wx:if="{{draft}}" class="send-btn" bindtap="sendText">发送</view>
+      <view
+        wx:else
+        class="mic-btn {{recording ? 'active' : ''}}"
+        bindtouchstart="startRecord"
+        bindtouchend="endRecord"
+        bindtouchcancel="cancelRecord"
+      >
+        {{recording ? '松开发送' : '按住说话'}}
+      </view>
+    </view>
+    <view class="composer-tip muted">{{asrTip}}</view>
+  </view>
+</view>

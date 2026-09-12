@@ -1,0 +1,57 @@
+<view class="page">
+  <view class="card">
+    <view class="card-title">
+      <text>人工审核台</text>
+      <text class="muted" bindtap="load">刷新</text>
+    </view>
+    <view class="muted">
+      风险检测与对话生成在架构上是解耦的：检测通道发现 high 及以上风险时，
+      会话会被 <text class="strong">interrupt()</text> 挂起，
+      由人来最终决定放行或改写。不做自动化闭环。
+    </view>
+  </view>
+
+  <view wx:if="{{!items.length}}" class="card empty">
+    <view class="muted">当前没有待处理的风险事件。</view>
+    <view class="muted m-t-s">在「聊聊」里输入一句高危表达（如「已经写好遗书了」）可以快速触发。</view>
+  </view>
+
+  <view wx:for="{{items}}" wx:key="id" class="card item">
+    <view class="row-between">
+      <text class="tag {{item.cls}}">{{item.levelText}}</text>
+      <text class="muted">{{item.sourceText}} · {{item.timeText}}</text>
+    </view>
+
+    <view class="ev-title m-t-s">证据原文</view>
+    <view class="ev-body">{{item.evidence}}</view>
+
+    <view class="row-between m-t-s">
+      <text class="muted">会话 {{item.shortSid}}</text>
+      <text wx:if="{{item.cssrs_dimension}}" class="muted">{{item.cssrs_dimension}}</text>
+    </view>
+
+    <view wx:if="{{item.editing}}" class="edit-box">
+      <textarea
+        class="textarea"
+        value="{{item.draft}}"
+        placeholder="改写要发给用户的话…"
+        maxlength="800"
+        bindinput="onDraft"
+        data-id="{{item.id}}"
+        auto-height
+      />
+      <view class="row gap m-t-s">
+        <button class="btn btn-ghost flex1" size="mini" bindtap="approve" data-id="{{item.id}}">确认放行原文</button>
+        <button class="btn btn-primary flex1" size="mini" bindtap="override" data-id="{{item.id}}">用改写内容</button>
+      </view>
+      <view class="row m-t-s">
+        <button class="btn btn-danger flex1" size="mini" bindtap="markHandled" data-id="{{item.id}}">仅标记已处理</button>
+      </view>
+    </view>
+
+    <view wx:else class="row gap m-t">
+      <button class="btn btn-ghost flex1" size="mini" bindtap="toggleEdit" data-id="{{item.id}}">处理</button>
+      <button class="btn btn-danger flex1" size="mini" bindtap="markHandled" data-id="{{item.id}}">标记已处理</button>
+    </view>
+  </view>
+</view>

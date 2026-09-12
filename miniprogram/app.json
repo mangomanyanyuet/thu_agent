@@ -1,0 +1,49 @@
+{
+  "pages": [
+    "pages/index/index",
+    "pages/chat/chat",
+    "pages/scale/scale",
+    "pages/overview/overview",
+    "pages/review/review"
+  ],
+  "window": {
+    "backgroundTextStyle": "dark",
+    "navigationBarBackgroundColor": "#F7F5F2",
+    "navigationBarTitleText": "心迹 MindTrace",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#F7F5F2"
+  },
+  "tabBar": {
+    "color": "#9A938B",
+    "selectedColor": "#6B8E7F",
+    "backgroundColor": "#FFFFFF",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/chat/chat",
+        "text": "聊聊"
+      },
+      {
+        "pagePath": "pages/scale/scale",
+        "text": "量表"
+      },
+      {
+        "pagePath": "pages/overview/overview",
+        "text": "我的"
+      }
+    ]
+  },
+  "permission": {
+    "scope.record": {
+      "desc": "用于采集语音以识别你的情绪状态（只提取声学特征，不留存原始音频）"
+    }
+  },
+  "requiredPrivateInfos": [],
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents"
+}

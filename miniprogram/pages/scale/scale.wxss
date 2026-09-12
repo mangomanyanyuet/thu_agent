@@ -1,0 +1,155 @@
+.tabs {
+  display: flex;
+  gap: 16rpx;
+  margin-bottom: 24rpx;
+}
+
+.tab {
+  flex: 1;
+  text-align: center;
+  padding: 16rpx 0;
+  border-radius: 32rpx;
+  background: #fff;
+  color: var(--ink-2);
+  font-size: 28rpx;
+}
+
+.tab.active {
+  background: var(--brand);
+  color: #fff;
+  font-weight: 600;
+}
+
+.strong {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.q {
+  padding: 24rpx 0;
+  border-bottom: 1rpx solid var(--line);
+}
+
+.q:last-child {
+  border-bottom: none;
+}
+
+.q-title {
+  display: flex;
+  gap: 14rpx;
+  margin-bottom: 16rpx;
+}
+
+.q-no {
+  flex-shrink: 0;
+  width: 40rpx;
+  height: 40rpx;
+  line-height: 40rpx;
+  text-align: center;
+  border-radius: 50%;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 24rpx;
+}
+
+.q-text {
+  flex: 1;
+  font-size: 29rpx;
+  line-height: 1.55;
+}
+
+.opts {
+  display: flex;
+  gap: 10rpx;
+}
+
+.opt {
+  flex: 1;
+  text-align: center;
+  padding: 16rpx 4rpx;
+  border-radius: 16rpx;
+  background: #faf8f6;
+  color: var(--ink-2);
+  font-size: 23rpx;
+  line-height: 1.3;
+}
+
+.opt.on {
+  background: var(--brand);
+  color: #fff;
+}
+
+.center {
+  text-align: center;
+}
+
+.m-t {
+  margin-top: 24rpx;
+}
+
+.m-t-s {
+  margin-top: 12rpx;
+}
+
+/* ---------------- 结果 ---------------- */
+.score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 24rpx;
+  margin-top: 12rpx;
+}
+
+.score-num {
+  font-size: 88rpx;
+  font-weight: 700;
+  color: var(--brand);
+  line-height: 1;
+}
+
+.score-sev {
+  font-size: 34rpx;
+  font-weight: 600;
+}
+
+.delta {
+  padding: 10rpx 0;
+}
+
+.delta-num {
+  font-size: 32rpx;
+  font-weight: 600;
+}
+
+.delta-num.up {
+  color: var(--danger);
+}
+
+.delta-num.down {
+  color: var(--brand);
+}
+
+.risk-box {
+  margin-top: 24rpx;
+  background: var(--danger-soft);
+  border-radius: 16rpx;
+  padding: 24rpx;
+}
+
+.risk-title {
+  font-weight: 600;
+  color: var(--danger);
+  margin-bottom: 8rpx;
+}
+
+.hotline-line {
+  display: flex;
+  justify-content: space-between;
+  padding: 10rpx 0;
+  font-size: 27rpx;
+  border-top: 1rpx solid rgba(194, 96, 79, 0.15);
+}
+
+.hotline-num {
+  color: var(--danger);
+  font-weight: 600;
+}

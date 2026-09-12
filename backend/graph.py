@@ -1,0 +1,628 @@
+"""LangGraph 编排图 —— 系统核心。
+
+图结构：
+
+                ┌─► risk_detector(规则+量表+多模态) ─┐  ← 独立安全通道，对主流程有否决权
+   entry ─┬─────┤                                    ├──► risk_gate ──┬─► crisis(高/危急)
+          │     └─► context_builder ─► emotion ──────┘                │      └─► interrupt(等人审)
+          │                                (模型通道)                  ├─► moderate(安全计划)
+          │                                                           └─► cbt(低/无)
+          └──────────────────────────────────────────────────────────────────┴─► memory_writer ─► END
+
+要点：
+1. 风险检测与对话生成【架构解耦】—— risk_detector 是并行独立分支，
+   不依赖 LLM 的共情生成，避免"为了维持关系而漏报"。
+2. 三通道取并集，只升不降（reducer keep_max + gate 再次取 max）。
+3. high/imminent 走 crisis 节点并用 interrupt() 挂起等人工，绝不自动化闭环。
+4. checkpointer 持久化每一步，事故可回放（医疗合规刚需）。
+"""
+from __future__ import annotations
+
+import uuid
+from typing import Any
+
+from config import get_settings
+from graph_state import CBT_NEXT, AgentState, assemble_system, context_budget_report
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+from langgraph.types import Command, interrupt
+from models import (
+    CBTStage,
+    EmotionAssessment,
+    ExtractedFacts,
+    MessageRow,
+    RiskAssessment,
+    RiskFlag,
+    RiskLevel,
+    SessionRow,
+    TurnAssessment,
+    now_iso,
+)
+from perception import (
+    hotlines,
+    multimodal_risk_signal,
+    rule_risk_level,
+    voice_risk_signal,
+)
+from storage import (
+    add_message,
+    add_risk_flag,
+    add_trace,
+    get_session,
+    list_daily_records,
+    list_messages,
+    list_risk_flags,
+    list_scale_scores,
+    upsert_session,
+)
+
+# ------------------------------------------------------------------ LLM 调用
+EMOTION_SYS = """你是情绪评估器。只输出 JSON，字段：
+primary_emotion(joy/calm/neutral/sadness/anxiety/anger/fear/shame/numbness),
+intensity(0-10), valence(-1~1), arousal(0~1), themes(数组), cognitive_distortions(数组),
+rationale(字符串)。不要输出 JSON 以外的内容。"""
+
+RISK_SYS = """你是独立的风险判定器，唯一职责是保守地识别自杀/自伤风险，宁可误报不可漏报。
+只输出 JSON：level(none/low/moderate/high/imminent), has_ideation, has_plan,
+has_preparation, has_intent, protective_factors(数组), evidence(触发判定的原话片段), confidence(0~1)。
+
+判定参考（C-SSRS 维度）：
+- low: 活着没意义、被动死亡愿望，无主动意念
+- moderate: 有主动自杀意念，无计划
+- high: 有计划 / 有准备行为 / 开始安排后事
+- imminent: 正在实施 / 手段在手 / 明确即刻意图
+注意识别隐喻与告别式表达（如"以后不用管我了""帮我把东西转交"），这类按 moderate 起判。
+不要输出 JSON 以外的内容。"""
+
+# 合并后的评估提示词：一次调用同时产出情绪 + 风险（省一轮推理，推理模型上尤其明显）
+ASSESS_SYS = """你是一名心理评估助手，同时完成「情绪评估」与「风险判定」两项任务。
+
+【任务一：情绪评估】识别用户当前主导情绪、强度、效价、主题与认知歪曲。
+
+【任务二：风险判定】这是你的第一优先级，唯一标准是保守——宁可误报，绝不可漏报。
+判定参考（C-SSRS 维度）：
+- none: 无相关表达
+- low: 活着没意义、被动死亡愿望、觉得自己是负担，但无主动意念
+- moderate: 有主动自杀意念，无具体计划
+- high: 有计划 / 有准备行为（如写遗书、安排后事、把东西送人）
+- imminent: 正在实施 / 手段在手 / 明确即刻意图
+务必留意隐喻与告别式表达（如"以后不用管我了""帮我把东西转交""最后一次说这些"），
+这类按 moderate 起判。risk_evidence 必须是用户原话片段，原文引用，不要改写。
+
+风险判定与情绪评估互不影响：即使整体情绪看起来平静，只要出现风险表达就必须升级。"""
+
+
+FACT_SYS = """你是记忆抽取器。从对话中抽取长期有效的事实，只输出 JSON：
+profile_facts(稳定的生活事实/重要他人/社会支持), triggers(触发源), events(近期事件),
+preferences(沟通偏好)。只抽取原文明确提到的内容，不要推断。没有就给空数组。"""
+
+CBT_SYS_EXTRA = "\n当前 CBT 阶段目标：{guide}\n按此目标推进，一次只问一个问题。"
+
+
+def _llm_messages(state: AgentState, n: int | None = None) -> list[dict[str, str]]:
+    """取最近 n 轮对话给 LLM（滑动窗口）。"""
+    s = get_settings()
+    n = n or s.ctx_recent_turns
+    msgs = [m for m in state.get("messages", []) if getattr(m, "type", None) in ("human", "ai")]
+    tail = msgs[-n:]
+    return [{"role": "user" if getattr(m, "type", None) == "human" else "assistant",
+             "content": str(m.content)} for m in tail]
+
+
+def _last_user_text(state: AgentState) -> str:
+    for m in reversed(state.get("messages", [])):
+        if getattr(m, "type", None) == "human":
+            return str(m.content)
+    return ""
+
+
+# ------------------------------------------------------------------ 节点
+def entry_node(state: AgentState) -> dict[str, Any]:
+    """载入长期记忆：画像、量表趋势、多模态摘要、历史风险（强制区）。"""
+    from memory import (
+        build_risk_trend,
+        build_scale_trend,
+        load_companion_context,
+        load_daily_context,
+        load_profile,
+        load_risk_context,
+        render_profile,
+        render_risk_trend,
+    )
+
+    uid = state["user_id"]
+    profile = load_profile(uid)
+    daily_ctx, inconsistent = load_daily_context(uid)
+    trend = build_risk_trend(uid)
+
+    return {
+        "profile_snapshot": render_profile(profile),
+        "scale_trend": build_scale_trend(uid),
+        "daily_summary": daily_ctx,
+        "modality_inconsistent": inconsistent,
+        "risk_trend": render_risk_trend(trend),
+        "companion_history": load_companion_context(uid),
+        "risk_context": load_risk_context(uid),
+        "cbt_stage": state.get("cbt_stage") or CBTStage.none.value,
+        "risk_level": state.get("risk_level", 0),
+    }
+
+
+def risk_detector_node(state: AgentState) -> dict[str, Any]:
+    """独立安全通道：规则 + 量表 + 多模态。不依赖对话生成模型。"""
+    text = _last_user_text(state)
+    uid = state["user_id"]
+
+    rule_lvl, rule_ev = rule_risk_level(text)
+
+    # 量表通道
+    scale_lvl, scale_ev = 0, ""
+    for name in ("PHQ-9", "GAD-7"):
+        hist = list_scale_scores(uid, name, limit=1)
+        if not hist:
+            continue
+        from perception import scale_risk_signal
+        lvl, ev = scale_risk_signal(name, hist[-1].item_scores)
+        if lvl > scale_lvl:
+            scale_lvl, scale_ev = lvl, ev
+
+    # 多模态通道
+    recs = list_daily_records(uid, limit=1)
+    mm_lvl, mm_ev = multimodal_risk_signal(recs[0] if recs else None)
+    if state.get("modality_inconsistent"):
+        mm_lvl = max(mm_lvl, 1)
+        mm_ev = (mm_ev + "；" if mm_ev else "") + "模态不一致（掩饰倾向）"
+
+    # 本轮语音：语气与文本内容不一致，或语气明显低落，都是独立的风险信号
+    # （用 text 而非 emotion —— emotion 在并行分支上，这里读不到）
+    v_lvl, v_ev = voice_risk_signal(state.get("voice_tone", ""),
+                                    state.get("voice_features", {}), text)
+    if v_lvl > mm_lvl:
+        mm_lvl, mm_ev = v_lvl, ((mm_ev + "；" if mm_ev else "") + v_ev)
+
+    return {
+        "risk_rule": {"level": rule_lvl, "evidence": rule_ev, "source": "rule"},
+        "risk_scale": {"level": scale_lvl, "evidence": scale_ev, "source": "scale_item"},
+        "risk_multimodal": {"level": mm_lvl, "evidence": mm_ev, "source": "multimodal"},
+        "risk_level": max(rule_lvl, scale_lvl, mm_lvl),
+        "risk_evidence": [e for e in (rule_ev, scale_ev, mm_ev) if e],
+    }
+
+
+def context_builder_node(state: AgentState) -> dict[str, Any]:
+    """并行分支：情绪评估 + 模型风险通道。
+
+    注意：这里**不**装配 system prompt —— 因为 risk_detector 在另一条并行分支上，
+    此刻 state 里还没有规则/量表/多模态通道的结果。装配必须放到汇聚节点，
+    否则注入的"当前风险等级"会偏低（这正是并行化带来的陷阱）。
+    """
+    from llm import structured
+
+    msgs = _llm_messages(state)
+    convo = "对话：\n" + "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
+
+    # 一次调用同时做情绪评估 + 风险判定（省一轮推理；解耦的是"生成"而非"评估"）
+    a: TurnAssessment = structured(
+        TurnAssessment, ASSESS_SYS,
+        f"{convo}\n\n用户最新一句话：{_last_user_text(state)}"
+        f"\n\n近期上下文摘要：{state.get('rolling_summary', '')[:300]}",
+    )
+    emotion_dict = a.to_emotion()
+    risk = a.to_risk()
+    model_lvl = risk["level"]
+
+    return {
+        "emotion": emotion_dict,
+        "risk_model": risk,
+        # 并集升级：reducer 会取 max，这里再显式取一次
+        "risk_level": max(state.get("risk_level", 0), model_lvl),
+        "risk_evidence": ([risk["evidence"]] if risk["evidence"] else []),
+    }
+
+
+def risk_gate(state: AgentState) -> str:
+    """条件边：按最终等级分流。等级取所有通道最大值。"""
+    level = final_level(state)
+    if level >= 3:
+        return "crisis"
+    if level == 2:
+        return "moderate"
+    return "cbt"
+
+
+def final_level(state: AgentState) -> int:
+    """三通道并集后的最终等级：取最大值，只升不降。"""
+    return max(
+        state.get("risk_level", 0),
+        state.get("risk_rule", {}).get("level", 0),
+        state.get("risk_model", {}).get("level", 0),
+        state.get("risk_multimodal", {}).get("level", 0),
+        state.get("risk_scale", {}).get("level", 0),
+    )
+
+
+def persist_risk_flags(state: AgentState) -> dict[str, Any]:
+    """汇聚节点：装配 system prompt（此时所有通道已就绪）+ 落库用户消息与风险事实。
+
+    ⚠ 两个关键设计：
+    1. system prompt 在这里装配（而非并行分支内），保证注入的"当前风险等级"
+       已包含规则/量表/多模态通道的结果。
+    2. 风险 flag 按「证据去重」写入，而不是用一个布尔开关 —— 布尔开关会被
+       checkpoint 带到下一轮，导致后续轮次的风险事件被吞掉。
+    3. 用户消息在这里就落库，即使后面被 interrupt 挂起，审计记录也不丢。
+    """
+    system = assemble_system({**state, "risk_level": final_level(state)})
+    stats = context_budget_report(system)
+    uid, sid = state["user_id"], state["session_id"]
+    level = final_level(state)
+    add_trace(sid, "context", system[:1500], f"risk_level={level}")
+
+    # 用户消息落库（幂等：同一轮只写一次，靠 msg_persisted_turn 判重）
+    turn_key = f"{sid}:{len(state.get('messages', []))}"
+    if state.get("_persisted_turn") != turn_key:
+        add_message(MessageRow(
+            id=None, session_id=sid, role="user", content=_last_user_text(state),
+            emotion=str(state.get("emotion", {}).get("primary_emotion", "")),
+            risk_level=["none", "low", "moderate", "high", "imminent"][min(level, 4)],
+            meta={"intensity": state.get("emotion", {}).get("intensity"),
+                  "themes": state.get("emotion", {}).get("themes", [])},
+        ))
+
+    if level <= 0:
+        return {"assembled_system": system, "context_stats": stats,
+                "_persisted_turn": turn_key}
+
+    level_name = ["none", "low", "moderate", "high", "imminent"][level]
+    dims = []
+    detail = state.get("risk_model", {})
+    if level >= 2:
+        dims.append("自杀意念")
+    if detail.get("has_plan"):
+        dims.append("有计划")
+    if detail.get("has_preparation"):
+        dims.append("准备行为")
+    if detail.get("has_intent"):
+        dims.append("有意图")
+
+    # 已存在的证据不再重复写（跨轮去重）
+    existing = {(f.source, f.evidence) for f in list_risk_flags(user_id=uid, limit=200)}
+    sources = [
+        ("rule", state.get("risk_rule", {}).get("evidence", "")),
+        ("model", state.get("risk_model", {}).get("evidence", "")),
+        ("multimodal", state.get("risk_multimodal", {}).get("evidence", "")),
+        ("scale_item", state.get("risk_scale", {}).get("evidence", "")),
+    ]
+    for src, ev in sources:
+        if ev and (src, ev) not in existing:
+            add_risk_flag(RiskFlag(
+                id=None, user_id=uid, session_id=sid, ts=now_iso(), source=src,
+                evidence=ev, level=level_name, cssrs_dimension="/".join(dims),
+            ))
+
+    return {"risk_detail": {"level_name": level_name, "dims": dims},
+            "assembled_system": system, "context_stats": stats,
+            "_persisted_turn": turn_key}
+
+
+def _hotline_block() -> str:
+    return "\n".join(f"- {h['name']} {h['number']}" for h in hotlines())
+
+
+def safe_fallback_reply(level: int) -> str:
+    """红线 4：模型超时/异常/被拦截时的兜底话术 + 热线，绝不静默失败。
+
+    注意 crisis/moderate 分支绝对不能用 MockLLM 的 CBT 台词兜底 ——
+    那是一句「能再多说一点吗」，在危机场景下等于放弃干预。
+    """
+    s = get_settings()
+    lines = _hotline_block()
+    if level >= 3:
+        return (
+            "我现在很担心你的安全。请先不要一个人待着。\n\n"
+            "下面是现在就能打通的求助渠道，请尽快联系其中一个：\n"
+            f"{lines}\n\n"
+            f"如果此刻有即时危险，请立刻拨打 {s.hotline_emergency_medical} 或 "
+            f"{s.hotline_emergency_police}。\n\n"
+            "我已经通知了值班人员，很快会有人来跟进。你愿意现在告诉我，"
+            "身边有没有可以联系的人吗？"
+        )
+    if level == 2:
+        return (
+            "谢谢你愿意告诉我这些。听起来你最近真的很难熬。\n\n"
+            "如果你愿意，可以先和身边信任的人说一说；也可以随时拨打这些渠道：\n"
+            f"{lines}\n\n"
+            "我想先确认一下：你现在是安全的吗？"
+        )
+    return (
+        "抱歉，我这边刚才有点卡住了，没能好好接住你的话。\n"
+        "你愿意再说一次吗？我会认真听。\n\n"
+        f"如果现在很难受，也可以先联系：{s.hotline_national}"
+    )
+
+
+def crisis_node(state: AgentState) -> dict[str, Any]:
+    """危机协议：停止探索式提问，给热线，挂起等人工。"""
+    from llm import complete, was_degraded
+    persist_risk_flags(state)
+
+    s = get_settings()
+    lines = "\n".join(f"- {h['name']} {h['number']}" for h in hotlines())
+    system = (
+        state["assembled_system"]
+        + "\n\n## 危机干预指令（最高优先级）\n"
+        + "1. 用一句话表达你听到了他的痛苦并在乎他的安全，不要说教。\n"
+        + "2. 明确给出以下求助渠道：\n" + lines + "\n"
+        + "3. 询问身边此刻是否有人能陪他，鼓励现在就联系一个人。\n"
+        + "4. 不要再追问计划细节、不要再探索情绪成因。\n"
+        + "5. 告知已通知值班人员。\n"
+        + "6. 全程语气平稳、温暖、简短。"
+    )
+    reply = complete(system, _llm_messages(state))
+    if not reply or was_degraded():
+        reply = safe_fallback_reply(final_level(state))
+
+    return {
+        "reply": reply,
+        "crisis_mode": True,
+        "hotlines": hotlines(),
+        "interrupt_reason": f"检测到{['','轻度','中度','重度','危急'][min(final_level(state), 4)]}风险，已挂起等待人工审核",
+    }
+
+
+def human_review_node(state: AgentState) -> dict[str, Any]:
+    """人在回路：high 及以上必须挂起等人工，不做自动化闭环。"""
+    payload = {
+        "session_id": state["session_id"],
+        "user_id": state["user_id"],
+        "risk_level": ["none", "low", "moderate", "high", "imminent"][min(state.get("risk_level", 4), 4)],
+        "evidence": state.get("risk_evidence", []),
+        "emotion": state.get("emotion", {}),
+        "reply_draft": state.get("reply", ""),
+        "message": "高风险会话，请人工审核后放行或改写回复",
+    }
+    # interrupt 抛出后图暂停；前端调用 resume 接口带上人工决定继续执行
+    decision = interrupt(payload)
+    if isinstance(decision, dict) and decision.get("action") == "override":
+        return {"reply": decision.get("reply", state.get("reply", "")),
+                "interrupt_reason": "已由人工改写"}
+    if isinstance(decision, dict) and decision.get("action") == "approve":
+        return {"interrupt_reason": "已由人工确认放行"}
+    return {"interrupt_reason": "人工已处理"}
+
+
+def moderate_node(state: AgentState) -> dict[str, Any]:
+    """中度：CBT + 共同制定安全计划 + 提供热线。"""
+    from llm import complete, was_degraded
+    persist_risk_flags(state)
+
+    lines = "\n".join(f"- {h['name']} {h['number']}" for h in hotlines())
+    system = (
+        state["assembled_system"]
+        + "\n\n## 中度风险干预指令\n"
+        + "1. 先共情确认他的痛苦，不要急于解决问题。\n"
+        + "2. 温和地确认安全：问他现在是否安全、身边有没有人。\n"
+        + "3. 和他一起制定一份简单的安全计划：\n"
+        + "   a) 识别预警信号  b) 自己能做的应对方式  c) 能联系的人  d) 求助渠道\n"
+        + "4. 在合适时机告知求助渠道：\n" + lines + "\n"
+        + "5. 不要追问具体方法细节。\n"
+        + "6. 语气温和、不评判、一次只问一个问题。"
+    )
+    reply = complete(system, _llm_messages(state))
+    if not reply or was_degraded():
+        reply = safe_fallback_reply(2)
+    return {"reply": reply, "crisis_mode": False, "hotlines": hotlines()}
+
+
+def cbt_node(state: AgentState) -> dict[str, Any]:
+    """轻/无风险：CBT 会谈流程，按阶段推进。"""
+    from llm import complete
+    from graph_state import CBT_STAGE_GUIDE
+
+    stage = state.get("cbt_stage") or CBTStage.none.value
+    guide = CBT_STAGE_GUIDE.get(stage, "")
+    extra = CBT_SYS_EXTRA.format(guide=guide)
+    if state.get("modality_inconsistent"):
+        extra += "\n注意：观察到用户自述偏正面但表情/语音偏负面，请更温和谨慎地探询，不要直接指出矛盾。"
+
+    reply = complete(state["assembled_system"] + extra, _llm_messages(state))
+    if not reply:
+        # 低风险分支没有热线索要，但仍不能静默失败
+        reply = safe_fallback_reply(0)
+    return {
+        "reply": reply,
+        "crisis_mode": False,
+        "cbt_stage": CBT_NEXT.get(stage, CBTStage.affect_labeling.value),
+    }
+
+
+def memory_writer_node(state: AgentState) -> dict[str, Any]:
+    """记忆写回：事实抽取 + 滚动摘要 + 消息落库 + 会话状态更新。"""
+    from llm import structured
+    from memory import summarize_history, write_facts
+
+    uid, sid = state["user_id"], state["session_id"]
+    text = _last_user_text(state)
+
+    # 1) 事实抽取（长期记忆写入）
+    #    用户事实是慢变量，没必要每轮都重抽 —— 每 N 轮抽一次可省一次完整推理
+    #    （推理模型上约 12s/次），画像质量几乎无损。
+    s = get_settings()
+    turn_no = len(state.get("messages", []))
+    facts_dict: dict[str, list[str]] = {}
+    if turn_no % s.fact_extract_every == 0:
+        # thinking=False：事实抽取是信息搬运（抽取原文明确提到的内容），
+        # 不需要推理，关思考可省约 5s。安全语义不受影响 —— 这条路径
+        # 不参与任何风险判定。
+        facts: ExtractedFacts = structured(ExtractedFacts, FACT_SYS,
+                                           f"用户说：{text}", thinking=False)
+        write_facts(uid, facts)
+        facts_dict = facts.model_dump()
+
+    # 2) 消息落库（用户消息已在 persist_flags 落过，这里只落回复）
+    level_name = ["none", "low", "moderate", "high", "imminent"][min(final_level(state), 4)]
+    emo = state.get("emotion", {})
+    add_message(MessageRow(
+        id=None, session_id=sid, role="assistant", content=state.get("reply", ""),
+        risk_level=level_name,
+        meta={"crisis": state.get("crisis_mode", False),
+              "stage": state.get("cbt_stage", "")},
+    ))
+
+    # 3) 滚动摘要：每 6 条消息压缩一次（风险原话已在 risk_flag 独立留存）
+    summary = state.get("rolling_summary", "")
+    stored = list_messages(sid, limit=200)
+    if len(stored) % 6 == 0 and len(stored) >= 6:
+        pending = [{"role": m.role, "content": m.content} for m in stored[-6:-2]]
+        summary = summarize_history(summary, pending)
+
+    # 4) 会话状态
+    sess = get_session(sid) or SessionRow(id=sid, user_id=uid, started_at=now_iso())
+    sess.last_risk = level_name
+    sess.cbt_stage = state.get("cbt_stage", sess.cbt_stage)
+    sess.summary = summary
+    sess.interrupted = bool(state.get("crisis_mode"))
+    upsert_session(sess)
+
+    # 5) 审计 trace
+    add_trace(sid, "turn", str(state.get("context_stats", {}))[:500],
+              (state.get("reply", ""))[:500])
+
+    return {
+        "rolling_summary": summary,
+        "facts": facts_dict,
+        "trace": [*state.get("trace", []), {
+            "ts": now_iso(),
+            "risk": level_name,
+            "emotion": emo.get("primary_emotion"),
+            "stage": state.get("cbt_stage"),
+            "ctx": state.get("context_stats", {}),
+        }],
+    }
+
+
+# ------------------------------------------------------------------ 构图
+def build_graph():
+    g = StateGraph(AgentState)
+
+    g.add_node("entry", entry_node)
+    g.add_node("risk_detector", risk_detector_node)
+    g.add_node("context_builder", context_builder_node)
+    g.add_node("persist_flags", persist_risk_flags)
+    g.add_node("crisis", crisis_node)
+    g.add_node("human_review", human_review_node)
+    g.add_node("moderate", moderate_node)
+    g.add_node("cbt", cbt_node)
+    g.add_node("memory_writer", memory_writer_node)
+
+    g.set_entry_point("entry")
+    # 并行：安全通道 与 上下文装配+情绪/模型风险 同时开始
+    g.add_edge("entry", "risk_detector")
+    g.add_edge("entry", "context_builder")
+    g.add_edge("risk_detector", "persist_flags")
+    g.add_edge("context_builder", "persist_flags")
+
+    g.add_conditional_edges(
+        "persist_flags",
+        risk_gate,
+        {"crisis": "crisis", "moderate": "moderate", "cbt": "cbt"},
+    )
+    # 危机路径：生成危机话术后必须过人工
+    g.add_edge("crisis", "human_review")
+    g.add_edge("human_review", "memory_writer")
+    g.add_edge("moderate", "memory_writer")
+    g.add_edge("cbt", "memory_writer")
+    g.add_edge("memory_writer", END)
+    return g
+
+
+_checkpointer = None
+_app = None
+
+
+def get_checkpointer():
+    """checkpointer：memory（演示）或 sqlite（持久化、可回放）。"""
+    global _checkpointer
+    if _checkpointer is None:
+        s = get_settings()
+        if s.checkpointer == "sqlite":
+            from langgraph.checkpoint.sqlite import SqliteSaver
+            import sqlite3
+            conn = sqlite3.connect(s.checkpoint_conn, check_same_thread=False)
+            _checkpointer = SqliteSaver(conn)
+        else:
+            _checkpointer = MemorySaver()
+    return _checkpointer
+
+
+def get_app():
+    global _app
+    if _app is None:
+        _app = build_graph().compile(checkpointer=get_checkpointer())
+    return _app
+
+
+def new_session(user_id: str, cbt_stage: str = "none") -> str:
+    sid = f"ses_{uuid.uuid4().hex[:12]}"
+    upsert_session(SessionRow(id=sid, user_id=user_id, started_at=now_iso(),
+                              cbt_stage=cbt_stage))
+    return sid
+
+
+def run_turn(user_id: str, session_id: str, user_text: str,
+             resume_payload: dict | None = None,
+             voice: dict | None = None) -> dict[str, Any]:
+    """执行一轮对话。
+
+    resume_payload 用于在 interrupt 后恢复（人工审核决定）。
+    voice 为本轮语音的感知结果（{audio_features, tone, tone_reason, summary}），
+    来自 /api/asr；无语音时传 None。
+    """
+    app = get_app()
+    cfg = {"configurable": {"thread_id": session_id}}
+
+    if resume_payload is not None:
+        from langgraph.types import Command as _Cmd
+        out = app.invoke(_Cmd(resume=resume_payload), config=cfg)
+    else:
+        voice = voice or {}
+        out = app.invoke(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "messages": [{"role": "user", "content": user_text}],
+                "rolling_summary": (get_session(session_id).summary
+                                    if get_session(session_id) else ""),
+                "voice_summary": voice.get("summary", ""),
+                "voice_tone": voice.get("tone", ""),
+                "voice_features": voice.get("audio_features", {}),
+            },
+            config=cfg,
+        )
+
+    state = app.get_state(cfg)
+    interrupted = bool(getattr(state, "next", None))
+    from llm import was_degraded
+    return {
+        "reply": out.get("reply", ""),
+        "degraded": was_degraded(),
+        "risk_level": ["none", "low", "moderate", "high", "imminent"][
+            min(out.get("risk_level", 0), 4)],
+        "risk_detail": out.get("risk_detail", {}),
+        "risk_evidence": out.get("risk_evidence", []),
+        "channels": {
+            "rule": out.get("risk_rule", {}),
+            "model": out.get("risk_model", {}),
+            "multimodal": out.get("risk_multimodal", {}),
+            "scale": out.get("risk_scale", {}),
+        },
+        "emotion": out.get("emotion", {}),
+        "cbt_stage": out.get("cbt_stage", ""),
+        "crisis_mode": out.get("crisis_mode", False),
+        "hotlines": out.get("hotlines", []),
+        "context_stats": out.get("context_stats", {}),
+        "facts": out.get("facts", {}),
+        "interrupted": interrupted,
+        "interrupt_reason": out.get("interrupt_reason", ""),
+        "pending_review": (state.tasks[0].interrupts[0].value
+                           if interrupted and state.tasks and state.tasks[0].interrupts else None),
+    }

@@ -1,0 +1,101 @@
+<view class="page">
+  <!-- 量表切换 -->
+  <view class="tabs">
+    <view
+      wx:for="{{scaleKeys}}"
+      wx:key="*this"
+      class="tab {{current === item ? 'active' : ''}}"
+      bindtap="switchScale"
+      data-key="{{item}}"
+    >{{item}}</view>
+  </view>
+
+  <view wx:if="{{!result}}" class="card">
+    <view class="card-title">{{meta.name}}</view>
+    <view class="muted">请回顾<text class="strong">过去两周</text>，选择最符合你情况的选项。</view>
+
+    <view class="q" wx:for="{{meta.items}}" wx:key="*this">
+      <view class="q-title">
+        <text class="q-no">{{index + 1}}</text>
+        <text class="q-text">{{item}}</text>
+      </view>
+      <view class="opts">
+        <view
+          wx:for="{{options}}"
+          wx:for-item="opt"
+          wx:for-index="oi"
+          wx:key="label"
+          class="opt {{answers[index] === oi ? 'on' : ''}}"
+          bindtap="pick"
+          data-q="{{index}}"
+          data-v="{{oi}}"
+        >{{opt}}</view>
+      </view>
+    </view>
+
+    <view class="row-between m-t">
+      <text class="muted">已答 {{answered}} / {{meta.items.length}}</text>
+      <text class="muted" bindtap="reset">清空</text>
+    </view>
+
+    <button class="btn btn-primary btn-block m-t" bindtap="submit" disabled="{{answered < meta.items.length}}">
+      提交（{{total}} 分）
+    </button>
+    <view wx:if="{{answered < meta.items.length}}" class="muted center m-t-s">答完所有题目才能提交</view>
+  </view>
+
+  <!-- 结果 -->
+  <view wx:else class="card">
+    <view class="card-title">{{meta.name}} 结果</view>
+    <view class="score-row">
+      <view class="score-num">{{result.total_score}}</view>
+      <view class="score-meta">
+        <view class="score-sev">{{result.severity}}</view>
+        <view class="muted">满分 {{maxTotal}}</view>
+      </view>
+    </view>
+
+    <view class="divider"></view>
+
+    <view class="row-between delta">
+      <text class="muted">较上次</text>
+      <text class="delta-num {{result.delta_vs_last > 0 ? 'up' : (result.delta_vs_last < 0 ? 'down' : '')}}">
+        {{result.delta_vs_last > 0 ? '+' : ''}}{{result.delta_vs_last}}
+      </text>
+    </view>
+    <view class="row-between delta">
+      <text class="muted">较基线</text>
+      <text class="delta-num {{result.delta_vs_baseline > 0 ? 'up' : (result.delta_vs_baseline < 0 ? 'down' : '')}}">
+        {{result.delta_vs_baseline > 0 ? '+' : ''}}{{result.delta_vs_baseline}}
+      </text>
+    </view>
+    <view class="muted m-t-s">趋势比单次绝对值更有参考意义：连续上升更值得关注。</view>
+
+    <!-- 量表通道触发风险：必须显式告知 -->
+    <view wx:if="{{riskLevel > 0}}" class="risk-box">
+      <view class="risk-title">已触发风险通道（{{riskMeta.label}}）</view>
+      <view class="body-text">{{riskEvidence}}</view>
+      <view class="muted m-t-s">这条记录会进入风险事实库，并在后续每一轮对话中强制注入。</view>
+      <view class="hotline-list m-t-s">
+        <view
+          wx:for="{{hotlines}}"
+          wx:for-item="hotline"
+          wx:key="number"
+          class="hotline-line"
+          bindtap="callHotline"
+          data-number="{{hotline.number}}"
+        >
+          <text>{{hotline.name}}</text>
+          <text class="hotline-num">{{hotline.number}} ›</text>
+        </view>
+      </view>
+    </view>
+
+    <button class="btn btn-ghost btn-block m-t" bindtap="reset">再测一次</button>
+  </view>
+
+  <view class="card">
+    <view class="card-title">说明</view>
+    <view class="muted">量表结果只是筛查参考，不是诊断。它会被用于校准对话中的情绪判断，并与你的历史分数比较得出趋势。</view>
+  </view>
+</view>

@@ -1,15 +1,17 @@
 """FastAPI 服务入口。"""
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import FastAPI, File, HTTPException, UploadFile  # noqa: E402
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
+from pydantic import BaseModel  # noqa: E402
 
 from config import get_settings  # noqa: E402
 from mini import router as mini_router  # noqa: E402
@@ -38,6 +40,184 @@ app.add_middleware(
 
 # 小程序适配层：同步接口 + 会话自愈 + 聚合配置（详见 mini.py 文档字符串）
 app.include_router(mini_router)
+
+
+# ------------------------------------------------------------------ 鉴权
+# 白名单：这些路径不需要登录
+AUTH_WHITELIST = (
+    "/api/auth/",
+    "/api/health",
+    "/api/asr/status",
+    "/docs", "/redoc", "/openapi.json",
+)
+
+
+def _current_session(request) -> dict | None:
+    token = request.headers.get("x-auth-token") or request.query_params.get("token")
+    if not token:
+        return None
+    import auth as auth_mod
+
+    return auth_mod.verify_token(token)
+
+
+def _json_body_user_id(raw: bytes) -> str | None:
+    """从 JSON 请求体里取 user_id（POST 接口普遍把身份放在 body 里）。"""
+    if not raw:
+        return None
+    try:
+        obj = json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(obj, dict):
+        v = obj.get("user_id")
+        return str(v) if v else None
+    return None
+
+
+@app.middleware("http")
+async def auth_middleware(request, call_next):
+    """统一鉴权 + 越权拦截。
+
+    两件事：
+    1. 除白名单外，/api/* 必须带有效 token（401）。
+    2. 请求里指定的 user_id 必须与登录身份一致（403）。
+
+    第 2 条是必须的：只校验 token 不校验身份，登录 A 账号就能读 B 的数据
+    （实测过：`/api/overview/u_demo` 用 alice 的 token 能拿到 demo 的全部
+    概览 —— 这就是典型的越权/IDOR）。
+
+    放在中间件而不是每个路由加依赖，是为了避免"新加接口忘记鉴权"。
+    """
+    from fastapi.responses import JSONResponse
+
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return await call_next(request)
+    if any(path.startswith(p) for p in AUTH_WHITELIST):
+        return await call_next(request)
+    if not get_settings().require_auth:
+        return await call_next(request)
+
+    session = _current_session(request)
+    if session is None:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "未登录或登录已过期，请重新登录"},
+        )
+    request.state.user = session
+
+    # ---- 越权检查：收集请求里出现的所有 user_id ----
+    requested: list[str] = []
+    q = request.query_params.get("user_id")
+    if q:
+        requested.append(q)
+    # 路径里的 u_xxx（如 /api/overview/u_demo）
+    requested += [s for s in path.split("/") if s.startswith("u_")]
+    # 请求体里的 user_id
+    raw = b""
+    if request.method in ("POST", "PUT", "PATCH"):
+        raw = await request.body()
+        b = _json_body_user_id(raw)
+        if b:
+            requested.append(b)
+
+    bad = [u for u in requested if u and u != session["user_id"]]
+    if bad:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": f"无权访问用户 {bad[0]} 的数据"},
+        )
+
+    # body 被读过后必须重新灌回去，否则下游路由拿到空 body
+    if raw:
+        async def receive():
+            return {"type": "http.request", "body": raw, "more_body": False}
+
+        request = Request(request.scope, receive)
+
+    return await call_next(request)
+
+
+def require_user(request) -> dict:
+    """取当前登录身份；未开启鉴权时回退为匿名（仅 demo 模式）。"""
+    s = getattr(request.state, "user", None)
+    if s:
+        return s
+    if get_settings().require_auth:
+        raise HTTPException(401, "未登录")
+    return {"user_id": "", "username": "anonymous"}
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    display_name: str = ""
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post(f"{settings.api_prefix}/auth/register")
+def auth_register(req: RegisterRequest):
+    import auth as auth_mod
+
+    try:
+        return auth_mod.register(req.username, req.password, req.display_name)
+    except auth_mod.AuthError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.post(f"{settings.api_prefix}/auth/login")
+def auth_login(req: LoginRequest):
+    import auth as auth_mod
+
+    try:
+        return auth_mod.login(req.username, req.password)
+    except auth_mod.AuthError as e:
+        # 统一文案，不区分"用户不存在"与"密码错误"，避免账号枚举
+        raise HTTPException(401, str(e)) from e
+
+
+@app.post(f"{settings.api_prefix}/auth/logout")
+def auth_logout(request: Request):
+    import auth as auth_mod
+
+    auth_mod.revoke_token(request.headers.get("x-auth-token", ""))
+    return {"ok": True}
+
+
+@app.get(f"{settings.api_prefix}/auth/me")
+def auth_me(request: Request):
+    """注意：本路径在鉴权白名单里，中间件不会注入 request.state.user，
+    所以这里必须自己校验 token，不能直接读 state。"""
+    import auth as auth_mod
+
+    if not get_settings().require_auth:
+        return {"user_id": "", "username": "anonymous"}
+    token = request.headers.get("x-auth-token") or request.query_params.get("token")
+    s = auth_mod.verify_token(token) if token else None
+    if not s:
+        raise HTTPException(401, "未登录或登录已过期")
+    return s
+
+
+@app.get(f"{settings.api_prefix}/auth/hint")
+def auth_hint():
+    """登录页用来提示演示账号。
+
+    只在「自动创建的演示账号还没被用过」时显示密码 —— 一旦有人登录过或
+    改过密码，就不再提示，避免把一个已知密码长期暴露在登录页上。
+    """
+    import auth as auth_mod
+
+    s = get_settings()
+    if not s.require_auth:
+        return {"require_auth": False, "demo": None}
+    demo = auth_mod.default_account_untouched()
+    return {"require_auth": True, "demo": demo}
 
 
 # ------------------------------------------------------------------ 对话
@@ -302,10 +482,48 @@ def traces(session_id: str):
     return list_traces(session_id)
 
 
+@app.get(f"{settings.api_prefix}/trace/events")
+def trace_events(request: Request, limit: int = 200, kind: str = ""):
+    """结构化事件流（可观测层）。
+
+    返回内存环形缓冲里的最近事件，供界面实时查看中间决策过程：
+    情绪融合、三通道判定、最终分级、状态转移、CBT 阶段、延迟。
+    """
+    import tracer
+
+    s = getattr(request.state, "user", None)
+    items = tracer.recent(limit=limit, kind=kind)
+    # 只返回当前登录用户相关事件（session_id 无法直接关联用户时退化为全量）
+    if s:
+        uid = s["user_id"]
+        items = [e for e in items
+                 if e.get("user_id") in (None, "", uid)
+                 or str(e.get("session_id", "")).startswith("cmp_")
+                 or str(e.get("session_id", "")).startswith("ses_")]
+    return {"events": items, "log_file": tracer.log_file_today()}
+
+
 @app.get(f"{settings.api_prefix}/health")
 def health():
     return {"ok": True, "llm_provider": settings.llm_provider,
-            "checkpointer": settings.checkpointer}
+            "checkpointer": settings.checkpointer,
+            "require_auth": settings.require_auth}
+
+
+@app.on_event("startup")
+def on_startup():
+    """建演示账号 + 清理过期 token。失败不影响服务启动。"""
+    try:
+        import auth as auth_mod
+
+        created = auth_mod.ensure_default_account()
+        if created:
+            print(f"[auth] 已创建演示账号：{created}（仅首次启动创建）", flush=True)
+        expired = auth_mod.purge_expired_tokens()
+        if expired:
+            print(f"[auth] 清理过期 token {expired} 条", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[auth] 初始化失败（服务继续运行）：{exc}", flush=True)
 
 
 # ================================================================== 陪伴会话

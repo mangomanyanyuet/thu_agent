@@ -53,6 +53,12 @@ def write_facts(user_id: str, facts: ExtractedFacts) -> None:
         merge_list_field(user_id, "events", facts.events, cap=20)
     if facts.preferences:
         merge_list_field(user_id, "preferences", facts.preferences, cap=10)
+    # 人格特质/应对方式是最慢的变量，cap 给小值：它们不该频繁变动，
+    # 堆太多会让噪声盖过真正稳定的信号（render_profile 只展示后 5 条）。
+    if facts.personality_traits:
+        merge_list_field(user_id, "personality_traits", facts.personality_traits, cap=8)
+    if facts.coping_style:
+        merge_list_field(user_id, "coping_style", facts.coping_style, cap=8)
 
 
 # ------------------------------------------------------------------ 结构化上下文
@@ -82,6 +88,74 @@ def load_risk_context(user_id: str, limit: int = 5) -> str:
         handled = "已处理" if f.handled else "待处理"
         lines.append(f"- [{f.level}/{f.source}/{handled}] {f.evidence[:80]}（{f.ts}）")
     return "\n".join(lines)
+
+
+def persist_daily_from_chat(
+    user_id: str, text: str, emotion: dict | None = None, risk_level: str = ""
+) -> None:
+    """把普通文字对话沉淀为当日记录。
+
+    为什么需要：daily_record 原来只有「陪伴会话 /finish」和「App 主动上报」
+    两个写入点，纯文字聊天的用户永远没有每日记录 —— 于是
+    `load_daily_context` 恒返回「（暂无每日记录）」，注入 prompt 的
+    「今日与近日多模态观察」永远是空的，纵向个性化（跟自己前几天比）
+    在主力场景下完全失效。
+
+    同日多次对话合并为一条（source=chat），不堆多条。
+    摘要走规则生成，不额外增加一次 LLM 调用。
+    """
+    from datetime import date
+
+    from models import DailyRecord
+    from storage import add_daily_record, find_daily_record, update_daily_record
+
+    if not text.strip():
+        return
+    day = date.today().isoformat()
+    emo = emotion or {}
+    label = str(emo.get("primary_emotion") or "").strip()
+
+    rec = find_daily_record(user_id, day, source="chat")
+    na = dict((rec.narrative_analysis if rec else None) or {})
+    na["source"] = "chat"
+
+    turns = int(na.get("turns", 0)) + 1
+    # 主导情绪：取当日出现次数最多的标签
+    dist = dict(na.get("emotion_distribution") or {})
+    if label:
+        dist[label] = dist.get(label, 0) + 1
+    dominant = max(dist, key=dist.get) if dist else ""
+
+    _ORDER = ["none", "low", "moderate", "high", "imminent"]
+    risk = str(na.get("risk_level") or "none")
+    if risk_level in _ORDER and _ORDER.index(risk_level) > _ORDER.index(risk):
+        risk = risk_level
+
+    # 累积用户原话，但要封顶，避免长会话把记录撑爆
+    _MAX = 2000
+    prev_t = (rec.transcript if rec else "") or ""
+    transcript = (prev_t + ("\n" if prev_t else "") + text.strip())[-_MAX:]
+
+    na.update(turns=turns, emotion_distribution=dist, risk_level=risk)
+
+    summary = f"对话 {turns} 轮"
+    if dominant:
+        summary += f"；主导情绪 {dominant}"
+    if risk != "none":
+        summary += f"；最高风险 {risk}"
+
+    if rec is not None:
+        rec.transcript = transcript
+        rec.narrative = summary
+        rec.narrative_analysis = na
+        rec.modality_summary = summary
+        update_daily_record(rec)
+    else:
+        add_daily_record(DailyRecord(
+            id=None, user_id=user_id, date=day,
+            transcript=transcript, narrative=summary,
+            narrative_analysis=na, modality_summary=summary,
+        ))
 
 
 def load_daily_context(user_id: str) -> tuple[str, bool]:

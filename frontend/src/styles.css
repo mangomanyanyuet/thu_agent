@@ -262,6 +262,240 @@ select { cursor: pointer; }
   display: flex; align-items: center; gap: 10px; justify-content: space-between;
 }
 
+/* ---------------- 决策轨迹（事件流） ---------------- */
+.ev-row {
+  padding: 8px 0;
+  border-top: 1px solid var(--line, #ece7e1);
+  cursor: pointer;
+}
+
+.ev-row:hover { background: #faf8f6; }
+
+.ev-row.ev-upgrade {
+  background: #fbeae7;
+  border-left: 3px solid #c2604f;
+  padding-left: 8px;
+}
+
+.ev-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ev-kind {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.ev-msg {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.55;
+  min-width: 200px;
+}
+
+.ev-ts {
+  flex-shrink: 0;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.ev-json {
+  margin: 8px 0 4px;
+  padding: 10px;
+  border-radius: 8px;
+  background: #f5f2ee;
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ---------------- 登录页 ---------------- */
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #eef3ef 0%, #f7f5f2 55%, #f3efe9 100%);
+  padding: 24px;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--card, #fff);
+  border-radius: 18px;
+  padding: 28px;
+  box-shadow: 0 10px 40px rgba(47, 44, 41, 0.08);
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.login-brand .logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--brand, #6b8e7f);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.login-brand h1 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.login-brand p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.login-tabs {
+  display: flex;
+  gap: 6px;
+  background: #f5f2ee;
+  border-radius: 10px;
+  padding: 4px;
+  margin-bottom: 18px;
+}
+
+.login-tabs span {
+  flex: 1;
+  text-align: center;
+  padding: 7px 0;
+  border-radius: 7px;
+  font-size: 14px;
+  color: var(--ink-2, #6b665f);
+  cursor: pointer;
+  transition: 0.15s;
+}
+
+.login-tabs span.on {
+  background: #fff;
+  color: var(--brand, #6b8e7f);
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+}
+
+.login-field {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.login-field span {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-3, #9a938b);
+  margin-bottom: 5px;
+}
+
+.login-field input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--line, #ece7e1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 14px;
+  outline: none;
+  background: #fdfcfa;
+}
+
+.login-field input:focus {
+  border-color: var(--brand, #6b8e7f);
+}
+
+.login-card .btn {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.login-err {
+  margin: 10px 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #fbeae7;
+  color: #c2604f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.login-demo {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f5f2ee;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.login-demo .btn {
+  width: auto;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.login-note {
+  margin-top: 16px;
+  text-align: center;
+  line-height: 1.6;
+}
+
+/* ---------------- 顶栏当前用户 ---------------- */
+.who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 4px;
+  border-radius: 22px;
+  background: #f5f2ee;
+}
+
+.who-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--brand, #6b8e7f);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.who-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.who-text b {
+  font-size: 13px;
+}
+
+.who-text .small {
+  font-size: 11px;
+}
+
 /* ---------------- 风险趋势 ---------------- */
 .trend-head {
   display: flex;

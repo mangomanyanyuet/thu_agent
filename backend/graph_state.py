@@ -61,6 +61,7 @@ class AgentState(TypedDict, total=False):
     risk_evidence: Annotated[list[str], merge_evidence]
     risk_detail: dict[str, Any]
     _persisted_turn: str      # 幂等键：本轮是否已落库用户消息
+    _traced_turn: str         # 幂等键：本轮是否已写过追踪日志（防 crisis/moderate 重复记）
 
     # ---------- 情绪评估 ----------
     emotion: dict[str, Any]
@@ -69,6 +70,7 @@ class AgentState(TypedDict, total=False):
     rolling_summary: str
     profile_snapshot: str
     facts: dict[str, Any]
+    last_fact_turn: int  # 上次事实抽取时的轮次，用于累积窗口（避免漏抽中间轮）
 
     # ---------- CBT ----------
     cbt_stage: str

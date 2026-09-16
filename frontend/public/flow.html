@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MindTrace Agent 架构与状态转移全图</title>
+<style>
+  :root{
+    --bg:#f7f5f2; --card:#fff; --ink:#2f2c29; --ink2:#6b665f; --ink3:#9a938b;
+    --line:#ece7e1; --brand:#6b8e7f; --brand-soft:#e8f0ec;
+    --danger:#c2604f; --danger-soft:#fbeae7; --warn:#d99a4e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);
+       font:15px/1.7 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+       padding:28px 20px 60px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:23px;font-weight:700;margin-bottom:6px}
+  .sub{color:var(--ink3);font-size:13px;margin-bottom:22px}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px;
+        background:#fff;padding:5px;border-radius:12px;box-shadow:0 1px 8px rgba(47,44,41,.05)}
+  .tabs button{border:none;background:transparent;padding:9px 15px;border-radius:8px;
+               font-size:13px;color:var(--ink2);cursor:pointer;font-family:inherit;transition:.15s}
+  .tabs button.on{background:var(--brand);color:#fff;font-weight:600}
+  .tabs button:hover:not(.on){background:var(--brand-soft)}
+  .card{background:var(--card);border-radius:14px;padding:22px;margin-bottom:18px;
+        box-shadow:0 2px 14px rgba(47,44,41,.05)}
+  .card h2{font-size:17px;margin-bottom:6px}
+  .card .desc{color:var(--ink2);font-size:13px;margin-bottom:16px;line-height:1.65}
+  .diagram{overflow-x:auto;display:flex;justify-content:center;min-height:120px}
+  .diagram svg{max-width:100%;height:auto}
+  .hide{display:none}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+  th,td{padding:9px 10px;text-align:left;border-top:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink3);font-weight:600;font-size:12px}
+  code{background:#f5f2ee;padding:1px 6px;border-radius:4px;font-size:12.5px}
+  .note{background:#fff7ed;border-left:3px solid var(--warn);padding:11px 14px;
+        border-radius:0 8px 8px 0;font-size:13px;color:#9a3412;line-height:1.65;margin-top:12px}
+  .err{background:var(--danger-soft);border-left:3px solid var(--danger);padding:11px 14px;
+       border-radius:0 8px 8px 0;font-size:13px;color:#7f2d20;line-height:1.65;margin-top:12px}
+  .foot{text-align:center;color:var(--ink3);font-size:12px;margin-top:26px}
+  .loading{color:var(--ink3);font-size:13px;padding:30px;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>MindTrace Agent 架构与状态转移全图</h1>
+  <p class="sub">按代码实际结构绘制 · 源码：<code>backend/graph.py</code> · <code>companion/state.py</code> · <code>graph_state.py</code></p>
+
+  <div class="tabs" id="tabs"></div>
+  <div id="panes"></div>
+
+  <p class="foot">
+    完整文档见 <code>docs/architecture_flow.md</code> ·
+    实时决策轨迹见 <code>data/traces/*.jsonl</code> 或页面「决策轨迹」tab
+  </p>
+</div>
+
+<script type="module">
+import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'
+mermaid.initialize({ startOnLoad: false, theme: 'base',
+  themeVariables: { primaryColor:'#e8f0ec', primaryTextColor:'#2f2c29',
+                    primaryBorderColor:'#6b8e7f', lineColor:'#9a938b',
+                    fontSize:'14px', fontFamily:'PingFang SC, Microsoft YaHei, sans-serif' } })
+
+const PANES = [
+  {
+    id:'overview', tab:'① 系统总览',
+    title:'系统总览：三端共用一套后端',
+    desc:'客户端有三个（Web / 微信小程序 / HTML 预览），后端只有一套。核心是 LangGraph 编排图与陪伴会话状态机，感知层把多模态转成结构化指标后才交给 LLM。',
+    code:`flowchart TB
+    subgraph CLIENTS["客户端"]
+        W["Web<br/>React + Vite"]
+        M["微信小程序<br/>原生"]
+        P["HTML 预览"]
+    end
+    subgraph API["FastAPI · /api"]
+        AUTH["鉴权中间件<br/>token + 越权拦截"]
+        COMP["/companion/*<br/>5分钟视频语音陪伴"]
+        CHAT["/chat<br/>长期陪伴对话"]
+        DATA["/daily · /scales · /overview"]
+        TRACE["/trace/events<br/>决策轨迹"]
+    end
+    subgraph CORE["编排层"]
+        G1["长期对话图<br/>9 节点"]
+        G2["陪伴会话状态机<br/>7 相位"]
+    end
+    subgraph PERCEPT["感知层：多模态 → 结构化"]
+        ASR["ASR<br/>faster-whisper"]
+        ACO["声学特征<br/>语速/基频/停顿"]
+        FACE["面部 blendshapes<br/>端侧，画面不出端"]
+        FUSE["融合"]
+    end
+    subgraph MEM["记忆层"]
+        PROF["user_profile"]
+        DAILY["daily_record"]
+        RISK["risk_flag<br/>永不压缩"]
+        SCALE["scale_score"]
+    end
+    LLM["LLM<br/>vLLM"]
+    DB[("SQLite")]
+    LOG[["traces/*.jsonl"]]
+    CLIENTS --> AUTH
+    AUTH --> COMP & CHAT & DATA & TRACE
+    COMP --> G2
+    CHAT --> G1
+    G1 & G2 --> ASR & ACO & FACE
+    ASR & ACO & FACE --> FUSE
+    FUSE --> G1 & G2
+    G1 & G2 --> LLM
+    G1 & G2 --> PROF & DAILY & RISK & SCALE
+    PROF & DAILY & RISK & SCALE --> DB
+    G1 & G2 -.-> LOG`,
+    extra:'<div class="note"><b>关键约束</b>：原始音视频不入库、不进 LLM 上下文。感知层只产出结构化指标（PRD §8 数据最小化）。</div>'
+  },
+  {
+    id:'langgraph', tab:'② 长期对话图',
+    title:'长期对话：LangGraph 状态图',
+    desc:'9 个节点。<code>entry</code> 后分两条并行分支，在 <code>persist_flags</code> 汇聚；再按最终风险等级条件分流到三个分支。',
+    code:`stateDiagram-v2
+    direction TB
+    [*] --> entry
+    entry --> fork1
+    state fork1 <<fork>>
+    fork1 --> risk_detector : 安全通道
+    fork1 --> context_builder : 情绪+模型风险
+    risk_detector --> join1
+    context_builder --> join1
+    state join1 <<join>>
+    join1 --> persist_flags : 汇聚后装配 system prompt
+    persist_flags --> crisis : level >= 3
+    persist_flags --> moderate : level == 2
+    persist_flags --> cbt : level < 2
+    crisis --> human_review : interrupt 挂起
+    human_review --> memory_writer : 人工放行后 resume
+    moderate --> memory_writer
+    cbt --> memory_writer
+    memory_writer --> [*]
+    state human_review {
+        [*] --> 等待人工
+        等待人工 --> approve : 放行原文
+        等待人工 --> override : 改写后放行
+        等待人工 --> reject : 拒绝
+    }`,
+    extra:`<div class="err"><b>并行化陷阱</b>：<code>context_builder</code> 内读到的 state <b>不含</b>规则/量表/多模态结果。若在此装配 system prompt，注入的"当前风险等级"会偏低 —— 高危场景是致命的。所以装配必须放到汇聚后的 <code>persist_flags</code>。</div>
+    <table><tr><th>节点</th><th>职责</th><th>调 LLM</th></tr>
+    <tr><td><code>entry</code></td><td>载入画像/趋势/多模态摘要/风险历史</td><td>否</td></tr>
+    <tr><td><code>risk_detector</code></td><td>规则 + 量表 + 多模态（独立于生成）</td><td>否</td></tr>
+    <tr><td><code>context_builder</code></td><td>情绪评估 + 模型风险（一次结构化调用）</td><td>是</td></tr>
+    <tr><td><code>persist_flags</code></td><td>装配 system prompt、落消息、落 risk_flag</td><td>否</td></tr>
+    <tr><td><code>crisis</code></td><td>危机协议：不追问、给热线、通知人工</td><td>是</td></tr>
+    <tr><td><code>human_review</code></td><td><code>interrupt()</code> 挂起等人工</td><td>否</td></tr>
+    <tr><td><code>moderate</code></td><td>CBT + 安全计划 + 热线</td><td>是</td></tr>
+    <tr><td><code>cbt</code></td><td>CBT 会谈，按阶段推进</td><td>是</td></tr>
+    <tr><td><code>memory_writer</code></td><td>事实抽取、滚动摘要、写审计</td><td>每 N 轮</td></tr></table>`
+  },
+  {
+    id:'phase', tab:'③ 陪伴会话状态机',
+    title:'陪伴会话：Phase 状态机（PRD v1.0 的 5 分钟流程）',
+    desc:'7 个相位。任意时刻 <code>risk_level == high</code> 会直接跳到 crisis；轮次满 4 或时间到 240s 进入收尾。',
+    code:`stateDiagram-v2
+    direction LR
+    [*] --> consent : 创建会话
+    consent --> quality : 三项同意全勾
+    consent --> aborted : 未同意 / 退出
+    quality --> opening : 质检通过
+    opening --> main : 用户首轮
+    main --> main : turn < 4 且 elapsed < 240s
+    main --> closing : turn >= 4 或 elapsed >= 240s
+    closing --> done : 输出结束语
+    done --> [*] : 生成三层报告
+    opening --> crisis : risk = high
+    main --> crisis : risk = high
+    crisis --> [*] : 仅关怀+转介<br/>不生成 Tier1/2
+    opening --> aborted : 中途退出
+    main --> aborted : 中途退出`,
+    extra:`<table><tr><th>常量</th><th>值</th><th>作用</th></tr>
+    <tr><td><code>TARGET_TOTAL</code></td><td>300s</td><td>目标总时长 5 分钟</td></tr>
+    <tr><td><code>WRAP_UP_AT</code></td><td>240s</td><td>4:00 触发收尾提醒（追加过渡句，不硬掐断）</td></tr>
+    <tr><td><code>HARD_LIMIT</code></td><td>330s</td><td>5:30 硬上限，强制结束</td></tr>
+    <tr><td><code>MAX_TURNS</code></td><td>4</td><td>主体最多轮次</td></tr>
+    <tr><td><code>SILENCE_PROMPT</code></td><td>8s</td><td>沉默 8s 主动确认</td></tr>
+    <tr><td><code>SILENCE_GIVE_UP</code></td><td>20s</td><td>累计 20s 视为放弃该轮</td></tr></table>
+    <div class="note">沉默时间<b>不计入"对话时长"</b>（否则用户思考会被扣时间），但计入总墙钟时间。</div>`
+  },
+  {
+    id:'cbt', tab:'④ CBT 阶段',
+    title:'CBT 会谈阶段流转',
+    desc:'每轮推进一个阶段，<b>追问深度不超过两层</b>（PRD §6.2），避免 5 分钟内话题过散、造成压迫感。',
+    code:`stateDiagram-v2
+    direction LR
+    none --> affect_labeling : 情绪命名
+    affect_labeling --> situation : 情境澄清
+    situation --> automatic_thought : 引出自动化思维
+    automatic_thought --> distortion : 识别认知歪曲
+    distortion --> socratic : 苏格拉底提问
+    socratic --> alternative : 形成替代性想法
+    alternative --> behavior : 行为激活
+    behavior --> wrapup : 小结 + 反馈
+    wrapup --> affect_labeling : 下一轮`
+  },
+  {
+    id:'risk', tab:'⑤ 风险三通道',
+    title:'风险判定：四通道并集，只升不降',
+    desc:'宁误报不漏报 —— 漏报是红线缺陷，误报只是多问一句。',
+    code:`flowchart TB
+    IN["用户输入<br/>文本 + 声学 + 面部"]
+    IN --> C1["通道1 · 文本规则<br/>分级词表 + 告别式/托付式"]
+    IN --> C2["通道2 · 模型语义<br/>隐晦表达 / 隐喻 / 反讽"]
+    IN --> C3["通道3 · 多模态<br/>语气低落 + 面部消极 + 模态不一致"]
+    IN --> C4["通道4 · 量表<br/>PHQ-9 第9题 > 0"]
+    C1 --> MAX{{"取最大值<br/>只升不降"}}
+    C2 --> MAX
+    C3 --> MAX
+    C4 --> MAX
+    MAX --> R0["0 none → cbt"]
+    MAX --> R1["1 low → cbt"]
+    MAX --> R2["2 moderate → moderate<br/>安全计划 + 热线"]
+    MAX --> R3["3 high → crisis<br/>中断 + 挂起等人工"]
+    MAX --> R4["4 imminent → crisis"]
+    style MAX fill:#fbeae7,stroke:#c2604f,stroke-width:2px
+    style R3 fill:#fbeae7,stroke:#c2604f
+    style R4 fill:#c2604f,color:#fff`,
+    extra:`<div class="err"><b>这条链路上修过两个真实缺陷</b>：<br>
+    ① <code>RISK_PATTERNS_IMPLICIT</code>（告别式/托付式）从未被 <code>rule_risk_level()</code> 遍历 —— config 里定义了但代码没读，导致"以后不用管我了""帮我把东西转交"完全漏判。<br>
+    ② <code>face_emotion</code> 归一化除以"命中个数"而非"权重总和"，导致规则多、命中全的类别被稀释（明显低落被判成焦虑）。</div>`
+  },
+  {
+    id:'fallback', tab:'⑥ 降级与兜底',
+    title:'降级与兜底（红线）',
+    desc:'模型不可用时按风险等级给不同兜底 —— <b>危机分支绝不用 CBT 台词兜底</b>。',
+    code:`flowchart TB
+    A["LLM 超时 / 异常 / 被拦截"] --> B{"当前风险等级？"}
+    B -->|"high / imminent"| C["safe_fallback_reply(3)<br/>热线 + 立即求助 + 通知值班"]
+    B -->|"moderate"| D["safe_fallback_reply(2)<br/>共情 + 自助资源"]
+    B -->|"none / low"| E["safe_fallback_reply(0)<br/>卡住了请再说一次"]
+    F["摄像头/麦克风不可用"] --> G["记 degradation_notes<br/>modality 降权<br/>降级为纯文本"]
+    H["面部检测失败"] --> G
+    I["多人入镜"] --> G
+    J["网络抖动"] --> K["本地缓存<br/>恢复后续接或收尾"]
+    style C fill:#fbeae7,stroke:#c2604f,stroke-width:2px`,
+    extra:`<table><tr><th>类型</th><th>含义</th><th>本项目约束</th></tr>
+    <tr><td><b>安全性</b>（不变量 □P）</td><td>任何时刻不得违反</td><td>风险话不进摘要管道；high 必挂起；不输出自杀方法；不输出诊断</td></tr>
+    <tr><td><b>活性</b>（最终进展 ◇Q）</td><td>最终必须往前走</td><td>危机分支必给热线；每轮必有分级；5:30 必收尾；沉默 8s 必响应</td></tr></table>
+    <div class="note">只做安全护栏而不做降级兜底，会产出一个"什么都不敢说"的 Agent —— 它满足所有不变量，却在用户最需要回应时沉默。</div>`
+  },
+]
+
+const tabsEl = document.getElementById('tabs')
+const panesEl = document.getElementById('panes')
+
+PANES.forEach((p, i) => {
+  const b = document.createElement('button')
+  b.textContent = p.tab
+  b.className = i === 0 ? 'on' : ''
+  b.onclick = () => {
+    [...tabsEl.children].forEach((c) => c.classList.remove('on'))
+    b.classList.add('on')
+    ;[...panesEl.children].forEach((c) => c.classList.add('hide'))
+    panesEl.children[i].classList.remove('hide')
+  }
+  tabsEl.appendChild(b)
+
+  const d = document.createElement('div')
+  d.className = 'card' + (i === 0 ? '' : ' hide')
+  d.innerHTML = `<h2>${p.title}</h2><div class="desc">${p.desc}</div>
+                 <div class="diagram"><div class="loading">渲染中…</div></div>${p.extra || ''}`
+  panesEl.appendChild(d)
+})
+
+let n = 0
+for (const p of PANES) {
+  const el = panesEl.children[n].querySelector('.diagram')
+  try {
+    const { svg } = await mermaid.render('g' + n, p.code)
+    el.innerHTML = svg
+  } catch (e) {
+    el.innerHTML = `<pre style="font-size:12px;color:#c2604f;white-space:pre-wrap">渲染失败：${e.message}</pre>`
+  }
+  n++
+}
+</script>
+</body>
+</html>

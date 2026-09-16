@@ -109,11 +109,46 @@ class CompanionEngine:
         audio_ok = bool(audio and audio.get("duration_sec", 0) > 0.3)
         face_ok = bool(face and face.get("blendshapes") and face.get("face_detected"))
 
+        # 关键词结果只作兜底 & 生成时的"倾听参考"；LLM 判定出来后会覆盖
         fused = fuse(t_label, t_conf, ac_v, ac_a, ac_conf,
                      f_label, f_conf, audio_ok, face_ok)
 
+        # ---- 可观测：本轮各模态判断 + 融合结果（LLM 情绪拿到后会再记一次）----
+        import tracer
+
+        def _log_emotion(fused_now: dict, text_src: str) -> None:
+            tracer.emotion_channels(s.session_id, turn_id, {
+                "文本": {"label": t_label, "confidence": t_conf},
+                "声学": {"valence": ac_v, "arousal": ac_a},
+                "面部": {"label": f_label, "confidence": f_conf},
+            })
+            tracer.emotion(
+                s.session_id, turn_id,
+                label=fused_now.get("label") or "未知",
+                valence=float(fused_now.get("valence") or 0.0),
+                arousal=float(fused_now.get("arousal") or 0.0),
+                confidence=float(fused_now.get("confidence") or 0.0),
+                weights=fused_now.get("weights"),
+                audio_ok=audio_ok, face_ok=face_ok,
+                text_source=text_src,
+            )
+
+        _log_emotion(fused, "keyword")
+
         # ---- 2) 风险（独立于生成，PRD §7.5）----
         risk_lvl, risk_ev = self._detect_risk(user_text, audio, face, fused)
+
+        import tracer
+
+        prev_lvl = s.risk_level
+        tracer.risk_final(s.session_id, turn_id,
+                          {"none": 0, "watch": 1, "high": 3}.get(risk_lvl, 0),
+                          {"规则": {"level": risk_lvl}, "模型": {"level": risk_lvl},
+                           "多模态": {"level": risk_lvl}},
+                          prev_level={"none": 0, "watch": 1, "high": 3}.get(prev_lvl, 0)
+                          if prev_lvl != risk_lvl else None)
+        for ev in risk_ev:
+            tracer.risk_channel(s.session_id, turn_id, "证据", risk_lvl, ev)
 
         # ---- 3) 降级记录（PRD §6.4）----
         if not audio_ok:
@@ -156,10 +191,30 @@ class CompanionEngine:
         if risk_lvl == "watch" and s.risk_level == "none":
             s.risk_level = "watch"
 
-        reply = self._generate_reply(turn_id, fused)
+        reply, llm_emotion = self._generate_reply(turn_id, fused)
+
+        # ---- 5.5) 用 LLM 判定的文本情绪重新融合 ----
+        # 关键词结果只用于生成时的"倾听参考"（必须同步可得）；
+        # 真正记入报告与每日记录的，优先用 LLM 判定。
+        if llm_emotion:
+            t_label = llm_emotion["label"]
+            t_conf = llm_emotion["confidence"]
+            tv = llm_emotion["valence"]
+            ta = llm_emotion["arousal"]
+            fused = fuse(t_label, t_conf, ac_v, ac_a, ac_conf,
+                         f_label, f_conf, audio_ok, face_ok,
+                         text_valence=tv, text_arousal=ta)
+            # 覆盖本轮已写入的记录
+            s.turns[-1]["text_emotion"] = {"label": t_label, "confidence": t_conf}
+            s.turns[-1]["fused_emotion"] = fused
+            _log_emotion(fused, "llm")
 
         # ---- 6) 阶段推进（PRD §6.1）----
         nxt = s.next_phase()
+        import tracer
+
+        tracer.phase(s.session_id, s.phase.value, nxt.value,
+                     reason=f"轮次 {s.turn_count} / 已用 {round(s.elapsed)}s")
         if nxt == Phase.CLOSING and s.phase != Phase.CLOSING:
             s.phase = Phase.CLOSING
             reply = self._closing(reply)
@@ -183,9 +238,20 @@ class CompanionEngine:
         }
 
     # ---------------------------------------------------------------- 生成
-    def _generate_reply(self, turn_id: int, fused: dict) -> str:
+    def _generate_reply(self, turn_id: int, fused: dict) -> tuple[str, dict | None]:
+        """生成回复，同时让模型隐式输出本轮用户的文本情绪判定。
+
+        返回 (reply, emotion)。emotion 为 None 表示解析失败，
+        调用方应回落到关键词匹配 —— 绝不因为拿不到情绪就中断对话。
+
+        一次调用两份产出，是为了不增加单轮延迟（单独再调一次实测约 +6s）。
+        """
+        from config import get_settings
+        from .llm_emotion import OUTPUT_SPEC, parse_reply_and_emotion
+
         s = self.s
-        system = ROLE
+        # 关闭时退回关键词匹配（延迟优先场景）
+        system = ROLE + (OUTPUT_SPEC if get_settings().companion_llm_emotion else "")
 
         guide = MAIN_QUESTION_GUIDE.get(min(turn_id, MAX_TURNS), "")
         system += f"\n\n【本轮目标】{guide}"
@@ -213,16 +279,23 @@ class CompanionEngine:
         prev_assistant = [m["content"] for m in s.history if m["role"] == "assistant"]
 
         messages = list(s.history[-6:])
-        reply = ""
+        reply, emotion = "", None
         try:
-            reply = _sanitize(complete(system, messages))
+            # 注意：必须先把 <reply>/<emotion> 标签留下再清洗，
+            # sanitize_reply() 会按泄漏特征词砍行，可能把标签段删掉。
+            raw = complete(system, messages)
+            reply, emotion = parse_reply_and_emotion(raw)
+            reply = _sanitize(reply)
             if reply and reply in prev_assistant:
                 system += ("\n\n【重要】你上一轮已经说过几乎一模一样的话，"
                            "这次必须换一个角度、换一种说法。")
-                reply = _sanitize(complete(system, messages))
+                raw = complete(system, messages)
+                reply, emo2 = parse_reply_and_emotion(raw)
+                reply = _sanitize(reply)
+                emotion = emotion or emo2
         except Exception:  # noqa: BLE001
-            reply = ""
-        return reply or self._fallback_reply(turn_id)
+            reply, emotion = "", None
+        return (reply or self._fallback_reply(turn_id)), emotion
 
     def _fallback_reply(self, turn_id: int) -> str:
         return ["嗯，我在听。能再多说一点吗？",

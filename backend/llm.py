@@ -64,36 +64,43 @@ class MockLLM:
             yield ch
 
 
+# 值统一为 EmotionLabel 的中文标签（与陪伴会话同一套口径）
 NEG_WORDS = {
-    "难过": "sadness", "悲伤": "sadness", "哭": "sadness", "低落": "sadness",
-    "沮丧": "sadness", "失望": "sadness", "孤独": "sadness", "委屈": "sadness",
-    "提不起劲": "sadness", "没意思": "sadness", "不想活": "sadness",
-    "焦虑": "anxiety", "紧张": "anxiety", "担心": "anxiety", "压力": "anxiety",
-    "压力大": "anxiety", "睡不着": "anxiety", "失眠": "anxiety", "睡不好": "anxiety",
-    "害怕": "fear", "恐慌": "fear", "恐惧": "fear",
-    "生气": "anger", "愤怒": "anger", "烦躁": "anger", "烦": "anger",
-    "内疚": "shame", "丢脸": "shame", "自责": "shame", "负担": "shame",
-    "麻木": "numbness", "没感觉": "numbness", "空的": "numbness",
-    "开心": "joy", "高兴": "joy", "不错": "joy", "挺好": "joy",
-    "还好": "calm", "平静": "calm", "放松": "calm",
+    "难过": "低落", "悲伤": "低落", "哭": "低落", "低落": "低落",
+    "沮丧": "低落", "失望": "低落", "孤独": "低落", "委屈": "低落",
+    "提不起劲": "疲惫", "没意思": "低落", "不想活": "低落",
+    "焦虑": "焦虑", "紧张": "紧张", "担心": "焦虑", "压力": "焦虑",
+    "压力大": "焦虑", "睡不着": "焦虑", "失眠": "焦虑", "睡不好": "焦虑",
+    "害怕": "紧张", "恐慌": "紧张", "恐惧": "紧张",
+    "生气": "烦躁", "愤怒": "烦躁", "烦躁": "烦躁", "烦": "烦躁",
+    "内疚": "低落", "丢脸": "低落", "自责": "低落", "负担": "低落",
+    "麻木": "低落", "没感觉": "低落", "空的": "低落",
+    "开心": "愉悦", "高兴": "愉悦", "不错": "愉悦", "挺好": "愉悦",
+    "还好": "平静", "平静": "平静", "放松": "平静",
+    "累": "疲惫", "疲惫": "疲惫", "没劲": "疲惫", "撑不住": "疲惫",
 }
 
 
+# 与 companion/fusion.py 的 EMOTION_PROTOTYPE 保持一致的原型值
+_MOCK_VALENCE = {"愉悦": 0.7, "平静": 0.15, "焦虑": -0.55, "低落": -0.70,
+                 "烦躁": -0.50, "疲惫": -0.35, "紧张": -0.40, "惊讶": 0.0}
+
+
 def _mock_emotion(text: str) -> EmotionAssessment:
-    label, hits = EmotionLabel.neutral, 0
+    label, hits = EmotionLabel.calm, 0
     for w, lab in NEG_WORDS.items():
         if w in text:
             label, hits = EmotionLabel(lab), hits + 1
     intensity = min(10, 3 + hits * 2)
-    valence = {"joy": 0.7, "calm": 0.3, "neutral": 0.0, "sadness": -0.6,
-               "anxiety": -0.5, "anger": -0.6, "fear": -0.6, "shame": -0.7,
-               "numbness": -0.3}.get(label.value, 0.0)
+    valence = _MOCK_VALENCE.get(label.value, 0.0)
+    # arousal 量纲 [-1,1]，与陪伴侧一致
+    arousal = 0.6 if label.value in ("焦虑", "紧张", "烦躁", "惊讶") else -0.3
     themes = [t for t in ["工作", "学习", "睡眠", "亲密关系", "家庭", "身体", "经济"] if t in text]
     distortions = [d for d in ["灾难化", "全或无", "读心", "过度概括", "情绪化推理"]
                    if d in text]
     return EmotionAssessment(
         primary_emotion=label, intensity=intensity, valence=valence,
-        arousal=0.6 if label in (EmotionLabel.anxiety, EmotionLabel.fear, EmotionLabel.anger) else 0.3,
+        arousal=arousal, emotion_confidence=0.6 if hits else 0.3,
         themes=themes, cognitive_distortions=distortions,
         rationale="(mock) 关键词启发式判定",
     )
@@ -135,7 +142,8 @@ def _mock_assessment(text: str) -> TurnAssessment:
     risk = _mock_risk(text)
     return TurnAssessment(
         primary_emotion=emo.primary_emotion, intensity=emo.intensity,
-        valence=emo.valence, arousal=emo.arousal, themes=emo.themes,
+        valence=emo.valence, arousal=emo.arousal,
+        emotion_confidence=emo.emotion_confidence, themes=emo.themes,
         cognitive_distortions=emo.cognitive_distortions,
         emotion_rationale=emo.rationale,
         risk_level=risk.level, has_ideation=risk.has_ideation, has_plan=risk.has_plan,
@@ -749,8 +757,14 @@ def get_llm():
 
 
 def structured(schema: type[T], system: str, user: str,
-               thinking: bool = True) -> T:
-    """结构化调用；失败时降级到 mock，绝不静默抛错中断危机流程。"""
+               thinking: bool | None = None) -> T:
+    """结构化调用；失败时降级到 mock，绝不静默抛错中断危机流程。
+
+    ⚠ thinking 默认必须是 None（交给 VLLMLlm 读配置），不能写 True ——
+    曾经这里默认 True，直接覆盖掉 `vllm_thinking_for_assess=False`，
+    导致开思考 + max_tokens=512 被截断、JSON 解析失败、
+    整轮静默回落 mock（表现是情绪值永远是关键词原型值）。
+    """
     try:
         out = get_llm().structured(schema, system, user, thinking=thinking)
     except Exception as exc:  # noqa: BLE001

@@ -77,7 +77,13 @@ has_preparation, has_intent, protective_factors(数组), evidence(触发判定�
 # 合并后的评估提示词：一次调用同时产出情绪 + 风险（省一轮推理，推理模型上尤其明显）
 ASSESS_SYS = """你是一名心理评估助手，同时完成「情绪评估」与「风险判定」两项任务。
 
-【任务一：情绪评估】识别用户当前主导情绪、强度、效价、主题与认知歪曲。
+【任务一：情绪评估】识别用户当前主导情绪、强度、效价、唤醒度、主题与认知歪曲。
+
+primary_emotion 只能取这 8 个中文标签之一：平静、愉悦、焦虑、低落、烦躁、疲惫、紧张、惊讶
+- valence（效价）：-1 极度消极 ~ 0 中性 ~ 1 极度积极
+- arousal（唤醒度）：-1 平静/低迷 ~ 0 适中 ~ 1 激动/亢奋
+- emotion_confidence（把握）：0 ~ 1
+- intensity（强度）：0 ~ 10
 
 【任务二：风险判定】这是你的第一优先级，唯一标准是保守——宁可误报，绝不可漏报。
 判定参考（C-SSRS 维度）：
@@ -89,12 +95,29 @@ ASSESS_SYS = """你是一名心理评估助手，同时完成「情绪评估」�
 务必留意隐喻与告别式表达（如"以后不用管我了""帮我把东西转交""最后一次说这些"），
 这类按 moderate 起判。risk_evidence 必须是用户原话片段，原文引用，不要改写。
 
-风险判定与情绪评估互不影响：即使整体情绪看起来平静，只要出现风险表达就必须升级。"""
+风险判定与情绪评估互不影响：即使整体情绪看起来平静，只要出现风险表达就必须升级。
+
+【输出】只输出一个 JSON 对象，不要 Markdown 围栏、不要前后缀文字。
+字段：primary_emotion, intensity, valence, arousal, emotion_confidence, themes,
+cognitive_distortions, risk_level, has_ideation, has_plan, has_preparation,
+has_intent, protective_factors, risk_evidence, risk_confidence
+themes 与 cognitive_distortions 必须是数组，多个值用数组表示，没有就给空数组 []。"""
 
 
 FACT_SYS = """你是记忆抽取器。从对话中抽取长期有效的事实，只输出 JSON：
 profile_facts(稳定的生活事实/重要他人/社会支持), triggers(触发源), events(近期事件),
-preferences(沟通偏好)。只抽取原文明确提到的内容，不要推断。没有就给空数组。"""
+preferences(沟通偏好), personality_traits(人格特质), coping_style(应对方式)。
+
+两条硬约束（人格/应对方式比事件更容易抽错，抽错会直接误导后续共情）：
+1. personality_traits 只抽用户**明确自述**的稳定特质或归因习惯，
+   如「我对自己要求很高」「我总是把错揽到自己身上」「我很在意别人怎么看」。
+   ❌ 严禁从单次情绪反推性格：用户今天难过 ≠ 「情绪不稳定」，
+      今天焦虑 ≠ 「焦虑型人格」。这类推断一律不抽。
+2. coping_style 只抽用户**明确说过**的应对做法，
+   如「我会去跑跑步」「一般就自己待着」「找朋友聊聊」「写日记」。
+   ❌ 不要从「想放松」推测出「喜欢听音乐」。
+
+只抽取原文明确提到的内容，没有就给空数组。宁可少抽，不可错抽。"""
 
 CBT_SYS_EXTRA = "\n当前 CBT 阶段目标：{guide}\n按此目标推进，一次只问一个问题。"
 
@@ -180,6 +203,14 @@ def risk_detector_node(state: AgentState) -> dict[str, Any]:
     if v_lvl > mm_lvl:
         mm_lvl, mm_ev = v_lvl, ((mm_ev + "；" if mm_ev else "") + v_ev)
 
+    # ---- 可观测：记录非模型通道（规则/量表/多模态）的判定 ----
+    import tracer
+
+    tracer.risk_channel(state["session_id"], -1, "规则", rule_lvl, rule_ev)
+    if scale_lvl:
+        tracer.risk_channel(state["session_id"], -1, "量表", scale_lvl, scale_ev)
+    tracer.risk_channel(state["session_id"], -1, "多模态", mm_lvl, mm_ev)
+
     return {
         "risk_rule": {"level": rule_lvl, "evidence": rule_ev, "source": "rule"},
         "risk_scale": {"level": scale_lvl, "evidence": scale_ev, "source": "scale_item"},
@@ -211,6 +242,29 @@ def context_builder_node(state: AgentState) -> dict[str, Any]:
     risk = a.to_risk()
     model_lvl = risk["level"]
 
+    # ---- 可观测：情绪融合结果 + 模型通道风险判定 ----
+    import tracer
+
+    # primary_emotion 已是中文 8 类（EmotionLabel 统一后），无需再做英文映射
+    tracer.emotion(
+        state["session_id"], -1,
+        label=str(emotion_dict.get("primary_emotion") or "未知"),
+        valence=float(emotion_dict.get("valence") or 0.0),
+        arousal=float(emotion_dict.get("arousal") or 0.0),
+        confidence=float(emotion_dict.get("confidence")
+                         or risk.get("confidence") or 0.0),
+        intensity=emotion_dict.get("intensity"),
+        themes=emotion_dict.get("themes"),
+        distortions=emotion_dict.get("cognitive_distortions"),
+        text_source="llm",
+    )
+    tracer.risk_channel(state["session_id"], -1, "模型", model_lvl,
+                        risk.get("evidence") or "",
+                        has_ideation=risk.get("has_ideation"),
+                        has_plan=risk.get("has_plan"),
+                        has_preparation=risk.get("has_preparation"),
+                        has_intent=risk.get("has_intent"))
+
     return {
         "emotion": emotion_dict,
         "risk_model": risk,
@@ -222,12 +276,24 @@ def context_builder_node(state: AgentState) -> dict[str, Any]:
 
 def risk_gate(state: AgentState) -> str:
     """条件边：按最终等级分流。等级取所有通道最大值。"""
+    import tracer
+
     level = final_level(state)
     if level >= 3:
-        return "crisis"
-    if level == 2:
-        return "moderate"
-    return "cbt"
+        dst = "crisis"
+    elif level == 2:
+        dst = "moderate"
+    else:
+        dst = "cbt"
+
+    tracer.transition(
+        state["session_id"], -1, "persist_flags", dst,
+        condition=f"final_level={level}",
+        reason={"crisis": "high 及以上，转危机协议并挂起等人工",
+                "moderate": "中度，CBT + 安全计划 + 热线",
+                "cbt": "低/无风险，常规 CBT 会谈"}[dst],
+    )
+    return dst
 
 
 def final_level(state: AgentState) -> int:
@@ -257,6 +323,25 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
     level = final_level(state)
     add_trace(sid, "context", system[:1500], f"risk_level={level}")
 
+    # ---- 可观测：最终分级（并集后）+ 上下文预算 ----
+    # 注意：crisis / moderate 节点会二次调用本函数（见各节点开头的
+    # persist_risk_flags(state)），若不判重，风险分级与上下文装配会各记两遍。
+    import tracer
+
+    _trace_key = f"{sid}:{len(state.get('messages', []))}:trace"
+    traced = state.get("_traced_turn") == _trace_key
+    if not traced:
+        tracer.risk_final(
+            sid, -1, level,
+            {"rule": state.get("risk_rule", {}),
+             "model": state.get("risk_model", {}),
+             "multimodal": state.get("risk_multimodal", {}),
+             "scale": state.get("risk_scale", {})},
+            prev_level=state.get("risk_level"),
+        )
+        tracer.context(sid, -1, stats,
+                       risk_level=["none", "low", "moderate", "high", "imminent"][min(level, 4)])
+
     # 用户消息落库（幂等：同一轮只写一次，靠 msg_persisted_turn 判重）
     turn_key = f"{sid}:{len(state.get('messages', []))}"
     if state.get("_persisted_turn") != turn_key:
@@ -270,7 +355,7 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
 
     if level <= 0:
         return {"assembled_system": system, "context_stats": stats,
-                "_persisted_turn": turn_key}
+                "_persisted_turn": turn_key, "_traced_turn": _trace_key}
 
     level_name = ["none", "low", "moderate", "high", "imminent"][level]
     dims = []
@@ -301,7 +386,7 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
 
     return {"risk_detail": {"level_name": level_name, "dims": dims},
             "assembled_system": system, "context_stats": stats,
-            "_persisted_turn": turn_key}
+            "_persisted_turn": turn_key, "_traced_turn": _trace_key}
 
 
 def _hotline_block() -> str:
@@ -428,6 +513,11 @@ def cbt_node(state: AgentState) -> dict[str, Any]:
     if not reply:
         # 低风险分支没有热线索要，但仍不能静默失败
         reply = safe_fallback_reply(0)
+
+    import tracer
+
+    tracer.cbt_stage(state["session_id"], stage,
+                     CBT_NEXT.get(stage, CBTStage.affect_labeling.value))
     return {
         "reply": reply,
         "crisis_mode": False,
@@ -435,28 +525,66 @@ def cbt_node(state: AgentState) -> dict[str, Any]:
     }
 
 
+def _user_texts(msgs: list) -> list[str]:
+    """从 messages 里取出用户说的话。
+
+    兼容两种形态：LangGraph 的 add_messages 会把 dict 转成 Message 对象，
+    但首轮 invoke 直接传入的仍是 dict，两种都要能吃下。
+    """
+    out: list[str] = []
+    for m in msgs:
+        if isinstance(m, dict):
+            role, content = m.get("role"), m.get("content")
+        else:
+            role, content = getattr(m, "type", None), getattr(m, "content", None)
+        if role in ("user", "human") and isinstance(content, str) and content.strip():
+            out.append(content.strip())
+    return out
+
+
 def memory_writer_node(state: AgentState) -> dict[str, Any]:
     """记忆写回：事实抽取 + 滚动摘要 + 消息落库 + 会话状态更新。"""
     from llm import structured
+    import memory
     from memory import summarize_history, write_facts
 
     uid, sid = state["user_id"], state["session_id"]
     text = _last_user_text(state)
 
     # 1) 事实抽取（长期记忆写入）
-    #    用户事实是慢变量，没必要每轮都重抽 —— 每 N 轮抽一次可省一次完整推理
-    #    （推理模型上约 12s/次），画像质量几乎无损。
     s = get_settings()
-    turn_no = len(state.get("messages", []))
+    msgs = state.get("messages", []) or []
+    turn_no = len(msgs)
+    last = int(state.get("last_fact_turn") or 0)
     facts_dict: dict[str, list[str]] = {}
-    if turn_no % s.fact_extract_every == 0:
+    new_last = last
+
+    # 首轮必抽：冷启动用户最需要画像，等满 N 轮再抽会让前几轮完全「裸奔」
+    # （且实测新用户常只聊 1~2 轮就走，那时画像恒为空）。
+    # 代价可接受 —— 实测 thinking=False 的抽取约 1.0~1.4s，不是原先估的 12s。
+    if turn_no == 1 or turn_no - last >= s.fact_extract_every:
+        # ⚠ 抽取窗口必须是「自上次抽取以来的全部用户文本」，不能只看最后一句。
+        #    原实现传 _last_user_text()，中间几轮说过的事实会永久丢失：
+        #    实测聊 4 轮只落 2 条，第 1 轮的「养了只猫叫豆豆」永远进不了画像。
+        window = "\n".join(_user_texts(msgs[last:])) or text
         # thinking=False：事实抽取是信息搬运（抽取原文明确提到的内容），
-        # 不需要推理，关思考可省约 5s。安全语义不受影响 —— 这条路径
-        # 不参与任何风险判定。
+        # 不需要推理。安全语义不受影响 —— 这条路径不参与任何风险判定。
         facts: ExtractedFacts = structured(ExtractedFacts, FACT_SYS,
-                                           f"用户说：{text}", thinking=False)
+                                           f"用户说：{window}", thinking=False)
         write_facts(uid, facts)
         facts_dict = facts.model_dump()
+        new_last = turn_no
+
+    # 1.5) 沉淀为当日记录（纯文字对话此前完全不写，导致「近日观察」恒为空）
+    try:
+        memory.persist_daily_from_chat(
+            uid, text,
+            emotion=state.get("emotion", {}),
+            risk_level=["none", "low", "moderate", "high", "imminent"][
+                min(final_level(state), 4)],
+        )
+    except Exception:  # noqa: BLE001  记录失败不能影响本轮回复
+        pass
 
     # 2) 消息落库（用户消息已在 persist_flags 落过，这里只落回复）
     level_name = ["none", "low", "moderate", "high", "imminent"][min(final_level(state), 4)]
@@ -487,9 +615,15 @@ def memory_writer_node(state: AgentState) -> dict[str, Any]:
     add_trace(sid, "turn", str(state.get("context_stats", {}))[:500],
               (state.get("reply", ""))[:500])
 
+    # 6) 可观测：本轮收尾
+    import tracer
+
+    tracer.memory_write(sid, uid, facts_dict, None)
+
     return {
         "rolling_summary": summary,
         "facts": facts_dict,
+        "last_fact_turn": new_last,
         "trace": [*state.get("trace", []), {
             "ts": now_iso(),
             "risk": level_name,
@@ -580,6 +714,19 @@ def run_turn(user_id: str, session_id: str, user_text: str,
     app = get_app()
     cfg = {"configurable": {"thread_id": session_id}}
 
+    import time as _time
+
+    _t0 = _time.monotonic()
+
+    import tracer
+
+    prev_sess = get_session(session_id)
+    tracer.turn_start(
+        session_id, user_id,
+        turn=len(list_messages(session_id, limit=200)) // 2 + 1,
+        text=user_text or "(resume)",
+    )
+
     if resume_payload is not None:
         from langgraph.types import Command as _Cmd
         out = app.invoke(_Cmd(resume=resume_payload), config=cfg)
@@ -602,7 +749,15 @@ def run_turn(user_id: str, session_id: str, user_text: str,
     state = app.get_state(cfg)
     interrupted = bool(getattr(state, "next", None))
     from llm import was_degraded
+
+    latency_ms = int((_time.monotonic() - _t0) * 1000)
+    tracer.turn_end(session_id, -1, latency_ms,
+                    len(out.get("reply", "")),
+                    crisis=bool(out.get("crisis_mode")),
+                    degraded=was_degraded())
+
     return {
+        "latency_ms": latency_ms,
         "reply": out.get("reply", ""),
         "degraded": was_degraded(),
         "risk_level": ["none", "low", "moderate", "high", "imminent"][

@@ -1,10 +1,46 @@
 const BASE = '/api'
 
+const LS = { token: 'mt_token', uid: 'mt_user', name: 'mt_username' }
+
+/** 登录态：token + user_id + username，存 localStorage */
+export const session = {
+  get() {
+    return {
+      token: localStorage.getItem(LS.token) || '',
+      user_id: localStorage.getItem(LS.uid) || '',
+      username: localStorage.getItem(LS.name) || '',
+    }
+  },
+  set(token, userId, username) {
+    localStorage.setItem(LS.token, token)
+    localStorage.setItem(LS.uid, userId)
+    localStorage.setItem(LS.name, username)
+  },
+  clear() {
+    Object.values(LS).forEach((k) => localStorage.removeItem(k))
+  },
+}
+
+function authHeaders() {
+  const t = session.get().token
+  return t ? { 'X-Auth-Token': t } : {}
+}
+
+/** 401 时清掉本地登录态并通知界面回到登录页 */
+function onUnauthorized() {
+  session.clear()
+  window.dispatchEvent(new CustomEvent('mt:unauthorized'))
+}
+
 async function req(path, options) {
   const res = await fetch(BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     ...options,
   })
+  if (res.status === 401) {
+    onUnauthorized()
+    throw new Error('登录已过期，请重新登录')
+  }
   if (!res.ok) {
     const text = await res.text()
     throw new Error(`${res.status} ${text.slice(0, 200)}`)
@@ -16,12 +52,39 @@ async function req(path, options) {
 async function uploadAudio(blob) {
   const form = new FormData()
   form.append('file', blob, 'voice.webm')
-  const res = await fetch(`${BASE}/asr`, { method: 'POST', body: form })
+  const res = await fetch(`${BASE}/asr`, {
+    method: 'POST',
+    body: form,
+    headers: authHeaders(),
+  })
+  if (res.status === 401) {
+    onUnauthorized()
+    throw new Error('登录已过期，请重新登录')
+  }
   if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`)
   return res.json()
 }
 
 export const api = {
+  // ---- 账号 ----
+  setSession: (token, userId, username) => session.set(token, userId, username),
+  clearSession: () => session.clear(),
+  getSession: () => session.get(),
+  authHint: () => req('/auth/hint'),
+  login: (username, password) =>
+    req('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+  register: (username, password, displayName) =>
+    req('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, password, display_name: displayName || '' }),
+    }),
+  logout: () =>
+    req('/auth/logout', { method: 'POST', headers: { ...authHeaders() } }),
+  me: () => req('/auth/me'),
+
   health: () => req('/health'),
   asrStatus: () => req('/asr/status'),
   asr: (blob) => uploadAudio(blob),
@@ -51,6 +114,9 @@ export const api = {
     req('/daily', { method: 'POST', body: JSON.stringify(payload) }),
   scales: () => req('/scales'),
   submitScale: (payload) => req('/scales', { method: 'POST', body: JSON.stringify(payload) }),
+  // 可观测：决策轨迹（tracer 事件流）
+  traceEvents: (limit = 200, kind = '') =>
+    req(`/trace/events?limit=${limit}${kind ? `&kind=${encodeURIComponent(kind)}` : ''}`),
   scaleHistory: (userId, name) =>
     req(`/scales/${encodeURIComponent(userId)}?scale_name=${encodeURIComponent(name)}`),
   pendingReviews: (minLevel = 2) => req(`/review/pending?min_level=${minLevel}`),

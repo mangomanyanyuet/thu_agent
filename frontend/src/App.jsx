@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react'
-import { api } from './api.js'
+import { useCallback, useEffect, useState } from 'react'
+import { api, session } from './api.js'
+import LoginView from './views/LoginView.jsx'
 import CompanionView from './views/CompanionView.jsx'
 import ChatView from './views/ChatView.jsx'
 import DailyView from './views/DailyView.jsx'
@@ -7,6 +8,7 @@ import ScaleView from './views/ScaleView.jsx'
 import ProfileView from './views/ProfileView.jsx'
 import ReviewView from './views/ReviewView.jsx'
 import TraceView from './views/TraceView.jsx'
+import EventTraceView from './views/EventTraceView.jsx'
 import { RISK_META } from './theme.js'
 
 const TABS = [
@@ -17,25 +19,33 @@ const TABS = [
   { key: 'profile', label: '画像与趋势', comp: ProfileView },
   { key: 'review', label: '人工审核台', comp: ReviewView },
   { key: 'trace', label: '上下文装配', comp: TraceView },
+  { key: 'events', label: '决策轨迹', comp: EventTraceView },
 ]
 
 export default function App() {
+  // 登录态：user_id 由服务端在登录时下发，不再由客户端随意指定
+  const [auth, setAuth] = useState(() => session.get())
   const [tab, setTab] = useState('companion')
-  const [userId, setUserId] = useState(localStorage.getItem('mt_user') || 'demo_user')
   const [sessionId, setSessionId] = useState(localStorage.getItem('mt_sid') || '')
   const [overview, setOverview] = useState(null)
   const [health, setHealth] = useState(null)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    localStorage.setItem('mt_user', userId)
-  }, [userId])
+  const userId = auth.user_id || ''
 
   useEffect(() => {
     if (sessionId) localStorage.setItem('mt_sid', sessionId)
   }, [sessionId])
 
-  const refreshOverview = async () => {
+  // 任意请求返回 401 时回到登录页（api.js 会派发该事件）
+  useEffect(() => {
+    const onUnauth = () => setAuth({ token: '', user_id: '', username: '' })
+    window.addEventListener('mt:unauthorized', onUnauth)
+    return () => window.removeEventListener('mt:unauthorized', onUnauth)
+  }, [])
+
+  const refreshOverview = useCallback(async () => {
+    if (!userId) return
     try {
       const [ov, h] = await Promise.all([api.overview(userId), api.health()])
       setOverview(ov)
@@ -44,18 +54,36 @@ export default function App() {
     } catch (e) {
       setError(String(e.message || e))
     }
-  }
+  }, [userId])
 
   useEffect(() => {
     refreshOverview()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId])
+  }, [refreshOverview])
 
   const ensureSession = async () => {
     if (sessionId) return sessionId
     const { session_id: sid } = await api.createSession(userId)
     setSessionId(sid)
     return sid
+  }
+
+  const handleLogout = async () => {
+    try {
+      await api.logout()
+    } catch {
+      /* 服务端 token 可能已过期，本地照常清理 */
+    }
+    session.clear()
+    localStorage.removeItem('mt_sid')
+    setSessionId('')
+    setOverview(null)
+    setAuth({ token: '', user_id: '', username: '' })
+    setTab('companion')
+  }
+
+  // 未登录 -> 登录页
+  if (!auth.token || !auth.user_id) {
+    return <LoginView onAuthed={setAuth} />
   }
 
   const latestRisk =
@@ -76,10 +104,14 @@ export default function App() {
         </div>
 
         <div className="controls">
-          <label className="field">
-            <span>用户 ID</span>
-            <input value={userId} onChange={(e) => setUserId(e.target.value)} />
-          </label>
+          {/* 当前登录用户：只读展示，不再是可随意改的输入框 */}
+          <div className="who">
+            <span className="who-avatar">{(auth.username || '?')[0].toUpperCase()}</span>
+            <div className="who-text">
+              <b>{auth.username || '未知用户'}</b>
+              <span className="muted small">{userId}</span>
+            </div>
+          </div>
           <button className="btn ghost" onClick={refreshOverview}>刷新</button>
           <button
             className="btn ghost"
@@ -98,10 +130,11 @@ export default function App() {
               LLM: {health.llm_provider} · CKPT: {health.checkpointer}
             </span>
           )}
+          <button className="btn ghost" onClick={handleLogout}>登出</button>
         </div>
       </header>
 
-      {error && <div className="error-bar">接口错误：{error}（确认后端已启动：uvicorn main:app --port 8000）</div>}
+      {error && <div className="error-bar">接口错误：{error}</div>}
 
       <nav className="tabs">
         {TABS.map((t) => (

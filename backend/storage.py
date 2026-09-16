@@ -83,6 +83,23 @@ CREATE TABLE IF NOT EXISTS audit_trace(
   session_id TEXT, node TEXT, ts TEXT,
   input_ctx TEXT DEFAULT '', output TEXT DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS app_user(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  display_name TEXT DEFAULT '',
+  created_at TEXT DEFAULT '',
+  last_login TEXT DEFAULT ''
+);
+CREATE TABLE IF NOT EXISTS auth_token(
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  username TEXT NOT NULL,
+  created_at TEXT DEFAULT '',
+  expires_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_user ON auth_token(user_id);
 """
 
 

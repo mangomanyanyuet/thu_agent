@@ -73,6 +73,31 @@ class Settings(BaseSettings):
     # 本地推理无平台限流，留极小间隔即可
     vllm_min_interval: float = float(os.getenv("VLLM_MIN_INTERVAL", "0.2"))
 
+    # ---- 账号体系（演示级，见 auth.py 顶部的安全说明）----
+    # 是否要求登录才能访问 /api/*（关闭则退回"客户端自报 user_id"的 demo 模式）
+    require_auth: bool = os.getenv("REQUIRE_AUTH", "1").lower() in ("1", "true", "yes")
+    # 首次启动自动创建的演示账号；账号表非空时不再创建
+    demo_username: str = os.getenv("DEMO_USERNAME", "demo")
+    demo_password: str = os.getenv("DEMO_PASSWORD", "demo1234")
+    demo_display_name: str = os.getenv("DEMO_DISPLAY_NAME", "演示用户")
+
+    # ---- 陪伴会话的文本情绪判定方式 ----
+    # 1（默认）：在生成回复的同一次 LLM 调用里，让模型额外输出一段机器可读的
+    #   情绪判定（不展示给用户）。不增加调用次数，但 prompt + 输出变长，
+    #   实测单轮 +1~2s；换来的是关键词覆盖不到的表达也能判对。
+    # 0：退回关键词匹配（快，但"心里空落落的"这类句子会判成平静）。
+    companion_llm_emotion: bool = os.getenv(
+        "COMPANION_LLM_EMOTION", "1").lower() in ("1", "true", "yes")
+
+    # ---- 可观测：结构化事件日志（见 tracer.py）----
+    trace_enabled: bool = os.getenv("TRACE_ENABLED", "1").lower() in ("1", "true", "yes")
+    # 落盘到 data/traces/agent-YYYYMMDD.jsonl
+    trace_to_file: bool = os.getenv("TRACE_TO_FILE", "1").lower() in ("1", "true", "yes")
+    # 同时打印到控制台（tail 后端日志时也能看到）
+    trace_echo: bool = os.getenv("TRACE_ECHO", "0").lower() in ("1", "true", "yes")
+    # 用户原话在日志里的截断长度（风险证据不截断，安全审计需要原话）
+    trace_text_max_len: int = int(os.getenv("TRACE_TEXT_MAX_LEN", "120"))
+
     # ---- 上下文预算（token 近似按字符/3 估算）----
     ctx_max_chars: int = 12000
     ctx_recent_turns: int = 8

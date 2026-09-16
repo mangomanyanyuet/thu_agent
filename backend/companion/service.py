@@ -6,6 +6,7 @@ from threading import Lock
 
 from models import RiskFlag, now_iso
 from storage import add_risk_flag
+from tracer import phase as trace_phase
 
 from .engine import CompanionEngine
 from .state import Phase, SessionState
@@ -40,6 +41,7 @@ def drop(sid: str) -> None:
 
 def set_consent(sid: str, consent: dict) -> SessionState:
     st = _sessions[sid]
+    trace_phase(sid, st.phase.value, Phase.QUALITY.value, reason="知情同意已确认")
     st.consent = consent
     st.phase = Phase.QUALITY
     if not consent.get("video", True):
@@ -59,6 +61,9 @@ def set_quality(sid: str, quality: dict) -> SessionState:
         st.note_degradation("光线不足，面部识别置信度下降")
     if quality.get("multi_person"):
         st.note_degradation("检测到多人入镜，已降级为纯语音模式")
+    trace_phase(sid, st.phase.value, Phase.OPENING.value,
+                reason=f"质检完成（人脸={quality.get('face_visible')}，"
+                       f"低光={quality.get('low_light')}，多人={quality.get('multi_person')}）")
     st.phase = Phase.OPENING
     return st
 
@@ -132,6 +137,17 @@ def finalize_session(sid: str) -> dict:
 
     # 4) 情绪基线：指数滑动平均，保证"相对恶化"有个参照系
     baseline = _update_baseline(st, report)
+
+    import tracer
+
+    tracer.memory_write(sid, st.user_id, facts_dict, baseline)
+    tracer.log("session.finalize",
+               f"会话收尾：落每日记录 #{getattr(rec, 'id', '?')}"
+               f"，风险 {st.risk_level}，轮次 {st.turn_count}",
+               session_id=sid, user_id=st.user_id,
+               daily_record_id=getattr(rec, "id", None),
+               risk_level=st.risk_level, turn_count=st.turn_count,
+               baseline=baseline)
 
     result = _pack_result(st, report, rec, facts_dict, baseline)
     _finalized[sid] = result

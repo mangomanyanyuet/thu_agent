@@ -217,17 +217,24 @@ def fuse(
     ac_valence: float, ac_arousal: float, ac_conf: float,
     face_label: str, face_conf: float,
     audio_ok: bool, face_ok: bool,
+    text_valence: float | None = None, text_arousal: float | None = None,
 ) -> dict:
     """决策级加权融合（PRD §6.3.3）。
 
     权重随置信度动态调整：某通道不可用（ASR 失败 / 人脸丢失 / 弱光）时
     该通道权重归零，其余通道重新归一化。
+
+    `text_valence` / `text_arousal`：由 LLM 判定时传入的细粒度维度值。
+    给了就用它，不给才回落到 `EMOTION_PROTOTYPE[label]` 的固定原型值 ——
+    否则 LLM 判出的"低落但效价 -0.3"会被压成原型的 -0.7，损失粒度。
     """
     channels = {}
 
     # 文本：给类别 + valence（语义最能反映 valence）
     if text_conf > 0:
-        tv, ta = EMOTION_PROTOTYPE.get(text_label, (0.0, 0.0))
+        p_v, p_a = EMOTION_PROTOTYPE.get(text_label, (0.0, 0.0))
+        tv = p_v if text_valence is None else float(text_valence)
+        ta = p_a if text_arousal is None else float(text_arousal)
         channels["text"] = {"w": text_conf, "conf": text_conf,
                             "v": tv, "a": ta * 0.5, "label": text_label}
     # 声学：主要给 arousal

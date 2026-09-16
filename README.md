@@ -168,7 +168,7 @@ docs/               调研报告、PRD、小程序方案、架构说明
 
 | 文档 | 内容 |
 |---|---|
-| `情绪识别陪伴Agent_PRD_2.md` | 产品需求（PRD v1.0） |
+| `docs/情绪识别陪伴Agent_PRD_2.md` | 产品需求（PRD v1.0） |
 | `docs/prd_gap_75.md` | PRD 覆盖度自查（75 分） |
 | `docs/agent_framework_research.md` | Agent 框架选型（LangGraph / ADK / AutoGen 对比） |
 | `docs/agent_harness_and_user_modeling.md` | Harness 六元组 + 冷启动用户建模 |

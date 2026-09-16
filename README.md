@@ -80,7 +80,51 @@ backend/
 frontend/src/views/ 对话 / 陪伴 / 每日记录 / 量表 / 画像 / 审核台 / 上下文装配 / 决策轨迹
 miniprogram/        微信小程序 Demo（5 页面，录音走 mp3）
 docs/               调研报告、PRD、小程序方案、架构说明
+data/               运行时生成，已 gitignore，永不入库（详见下节）
 ```
+
+---
+
+## `data/` 目录
+
+运行时生成，**不在版本库里**（`.gitignore` 已排除 `data/`、所有 `*.db` / `*.sqlite`）。
+
+```
+data/
+  mindtrace.db          主库：画像 / 会话 / 消息 / 风险标记 / 量表 / 每日记录
+  mindtrace.db-wal      ┐ SQLite WAL 模式伴生文件
+  mindtrace.db-shm      ┘ 停服后自动合并回主库，不要单独拷贝
+  checkpoints.sqlite    LangGraph checkpointer，图状态快照（thread_id = session_id）
+  checkpoints.sqlite-wal / -shm
+  traces/
+    agent-YYYYMMDD.jsonl   每轮决策事件日志，一行一条
+  *.bak.MMDD_HHMM        手动备份（sqlite3 backup API 生成，含 WAL 的一致性快照）
+```
+
+| 文件 | 说明 |
+|---|---|
+| `mindtrace.db` | 主库。所有业务表：`user_profile` / `session` / `message` / `risk_flag` / `scale_score` / `daily_record` / `audit_trace` / `app_user` / `auth_token` |
+| `checkpoints.sqlite` | LangGraph 状态快照。删掉不影响历史消息，但进行中的会话会丢失上下文 |
+| `traces/*.jsonl` | 每轮决策事件（通道判定、上下文装配、图转移、记忆写入）。`trace_enabled=0` 可关闭 |
+| `*.bak.*` | 人工备份。确认无需回滚后可删：`rm data/*.bak.*` |
+
+**备份必须用 `sqlite3` 的 backup API，不要用 `cp`**：
+
+```bash
+python3 -c "import sqlite3; a=sqlite3.connect('data/mindtrace.db'); \
+b=sqlite3.connect('data/mindtrace.db.bak'); a.backup(b)"
+```
+
+直接 `cp` 只拷主库文件，会漏掉 `-wal` 里尚未落盘的数据（实测 WAL 有 4 MB 而主库 438 KB）。
+
+**查看实时决策日志**（每条带人类可读的 `msg` 字段，直接 tail 就有意义）：
+
+```bash
+tail -f data/traces/agent-$(date +%Y%m%d).jsonl | jq -r .msg
+```
+
+> 心理数据属敏感个人信息：不入库、定期清理、限制访问。日志中用户原话按
+> `trace_text_max_len`（默认 120）截断，但**风险证据不截断** —— 安全审计需要原话。
 
 ---
 

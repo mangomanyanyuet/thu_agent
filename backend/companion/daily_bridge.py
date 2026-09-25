@@ -18,6 +18,7 @@ from collections import Counter
 from datetime import date
 from typing import Any
 
+from config import NEGATIVE_WORDS, POSITIVE_WORDS
 from models import DailyRecord, now_iso
 
 from .state import SessionState
@@ -38,10 +39,9 @@ LABEL_TO_KEY = {
 # 反查：展示层用中文，存储层用英文 key 兼容风险通道
 KEY_TO_LABEL = {v: k for k, v in LABEL_TO_KEY.items()}
 
-# 自述文本分析用的正负向词表（与 perception.analyze_narrative_stub 同源）
-_POSITIVE_WORDS = ["开心", "不错", "顺利", "喜欢", "期待", "谢谢", "挺好", "还好", "放松"]
-_NEGATIVE_WORDS = ["难过", "累", "烦", "焦虑", "失眠", "压力", "害怕", "孤独",
-                   "没意思", "不想", "难受", "低落", "绝望", "委屈", "没用", "做不好"]
+# 自述文本分析用的正负向词表统一走 config.POSITIVE_WORDS / NEGATIVE_WORDS。
+# 此前这里单独维护一份（比 perception 的多"没用/做不好"），导致同一段自述
+# 在陪伴链路与每日上报链路判出不同 tone，进而影响掩饰检测与负面词判定。
 _TOPIC_WORDS = ["工作", "学习", "考试", "睡眠", "失眠", "家人", "父母", "孩子",
                 "朋友", "同事", "领导", "恋人", "分手", "吵架", "身体", "钱",
                 "经济", "搬家", "生病", "未来"]
@@ -127,8 +127,8 @@ def _video_features(turns: list[dict]) -> dict[str, Any]:
 
 def _narrative_analysis(st: SessionState, narrative: str,
                         report: dict) -> dict[str, Any]:
-    pos = sum(narrative.count(w) for w in _POSITIVE_WORDS)
-    neg = sum(narrative.count(w) for w in _NEGATIVE_WORDS)
+    pos = sum(narrative.count(w) for w in POSITIVE_WORDS)
+    neg = sum(narrative.count(w) for w in NEGATIVE_WORDS)
     tone = "positive" if pos > neg else ("negative" if neg > pos else "neutral")
     themes = [w for w in _TOPIC_WORDS if w in narrative]
 
@@ -324,8 +324,8 @@ def merge_daily_record(old: DailyRecord, new: DailyRecord) -> DailyRecord:
                               + (na.get("duration_sec") or 0), 1),
         "sessions": (oa.get("sessions") or 1) + 1,
         # 文本统计基于合并后的全文
-        "pos_hits": sum(narrative.count(w) for w in _POSITIVE_WORDS),
-        "neg_hits": sum(narrative.count(w) for w in _NEGATIVE_WORDS),
+        "pos_hits": sum(narrative.count(w) for w in POSITIVE_WORDS),
+        "neg_hits": sum(narrative.count(w) for w in NEGATIVE_WORDS),
     })
     pos, neg = merged_na["pos_hits"], merged_na["neg_hits"]
     merged_na["tone"] = "positive" if pos > neg else ("negative" if neg > pos else "neutral")

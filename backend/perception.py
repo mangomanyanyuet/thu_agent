@@ -10,7 +10,11 @@ from __future__ import annotations
 from datetime import date as _date
 from typing import Any
 
-from config import get_settings
+from config import (
+    NEGATIVE_WORDS,
+    POSITIVE_WORDS,
+    get_settings,
+)
 from models import DailyRecord, DailySummary, ScaleScore
 from storage import list_scale_scores
 
@@ -138,8 +142,9 @@ def analyze_video_stub(video_uri: str, transcript: str = "") -> dict[str, Any]:
 
 def analyze_narrative_stub(narrative: str) -> dict[str, Any]:
     """自述文本分析。生产替换为情绪分类/主题抽取模型。"""
-    pos = sum(narrative.count(w) for w in ["开心", "不错", "顺利", "喜欢", "期待", "谢谢"])
-    neg = sum(narrative.count(w) for w in ["难过", "累", "烦", "焦虑", "失眠", "压力", "害怕", "孤独"])
+    # 词表统一走 config（此前 4 处各维护一份，口径不一致，见 config 注释）
+    pos = sum(narrative.count(w) for w in POSITIVE_WORDS)
+    neg = sum(narrative.count(w) for w in NEGATIVE_WORDS)
     tone = "positive" if pos > neg else ("negative" if neg > pos else "neutral")
     themes = [t for t in ["工作", "学习", "睡眠", "亲密关系", "家庭", "身体", "经济"] if t in narrative]
     return {
@@ -301,12 +306,6 @@ def multimodal_risk_signal(record: DailyRecord | None) -> tuple[int, str]:
     return level, "；".join(signals)
 
 
-_POSITIVE_WORDS = ("挺好", "还好", "不错", "开心", "高兴", "顺利", "喜欢",
-                   "还行", "可以", "没事", "很好", "放松")
-_NEGATIVE_WORDS = ("难过", "累", "烦", "焦虑", "失眠", "压力", "害怕", "孤独",
-                   "没意思", "不想", "难受", "低落", "绝望", "委屈")
-
-
 def text_tone_of(text: str) -> str:
     """同步判断文本情绪倾向。
 
@@ -315,8 +314,8 @@ def text_tone_of(text: str) -> str:
     """
     if not text:
         return "neutral"
-    pos = sum(text.count(w) for w in _POSITIVE_WORDS)
-    neg = sum(text.count(w) for w in _NEGATIVE_WORDS)
+    pos = sum(text.count(w) for w in POSITIVE_WORDS)
+    neg = sum(text.count(w) for w in NEGATIVE_WORDS)
     if pos > neg:
         return "positive"
     if neg > pos:

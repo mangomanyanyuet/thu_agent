@@ -18,7 +18,7 @@ from collections.abc import Iterator
 from contextvars import ContextVar
 from typing import TypeVar
 
-from config import get_settings
+from config import EMOTION_KEYWORD_MAP, get_settings
 from models import (
     EmotionAssessment,
     EmotionLabel,
@@ -64,21 +64,9 @@ class MockLLM:
             yield ch
 
 
-# 值统一为 EmotionLabel 的中文标签（与陪伴会话同一套口径）
-NEG_WORDS = {
-    "难过": "低落", "悲伤": "低落", "哭": "低落", "低落": "低落",
-    "沮丧": "低落", "失望": "低落", "孤独": "低落", "委屈": "低落",
-    "提不起劲": "疲惫", "没意思": "低落", "不想活": "低落",
-    "焦虑": "焦虑", "紧张": "紧张", "担心": "焦虑", "压力": "焦虑",
-    "压力大": "焦虑", "睡不着": "焦虑", "失眠": "焦虑", "睡不好": "焦虑",
-    "害怕": "紧张", "恐慌": "紧张", "恐惧": "紧张",
-    "生气": "烦躁", "愤怒": "烦躁", "烦躁": "烦躁", "烦": "烦躁",
-    "内疚": "低落", "丢脸": "低落", "自责": "低落", "负担": "低落",
-    "麻木": "低落", "没感觉": "低落", "空的": "低落",
-    "开心": "愉悦", "高兴": "愉悦", "不错": "愉悦", "挺好": "愉悦",
-    "还好": "平静", "平静": "平静", "放松": "平静",
-    "累": "疲惫", "疲惫": "疲惫", "没劲": "疲惫", "撑不住": "疲惫",
-}
+# 关键词情绪映射已收进 config.EMOTION_KEYWORD_MAP（本文件原 NEG_WORDS）。
+# 值统一为 EmotionLabel 的中文标签（与陪伴会话同一套口径）；
+# 遍历顺序即优先级（后命中覆盖先命中），调整顺序会改变 mock 输出。
 
 
 # 与 companion/fusion.py 的 EMOTION_PROTOTYPE 保持一致的原型值
@@ -88,7 +76,7 @@ _MOCK_VALENCE = {"愉悦": 0.7, "平静": 0.15, "焦虑": -0.55, "低落": -0.70
 
 def _mock_emotion(text: str) -> EmotionAssessment:
     label, hits = EmotionLabel.calm, 0
-    for w, lab in NEG_WORDS.items():
+    for w, lab in EMOTION_KEYWORD_MAP.items():
         if w in text:
             label, hits = EmotionLabel(lab), hits + 1
     intensity = min(10, 3 + hits * 2)

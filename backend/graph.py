@@ -325,11 +325,11 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
     stats = context_budget_report(system)
     uid, sid = state["user_id"], state["session_id"]
     level = final_level(state)
-    add_trace(sid, "context", system[:1500], f"risk_level={level}")
 
     # ---- 可观测：最终分级（并集后）+ 上下文预算 ----
     # 注意：crisis / moderate 节点会二次调用本函数（见各节点开头的
-    # persist_risk_flags(state)），若不判重，风险分级与上下文装配会各记两遍。
+    # persist_risk_flags(state)），若不判重，风险分级、上下文装配与
+    # audit_trace 会各记两遍（tracer 事件与 DB 轨迹都要挂在这个幂等键下）。
     import tracer
 
     _trace_key = f"{sid}:{len(state.get('messages', []))}:trace"
@@ -345,6 +345,10 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
         )
         tracer.context(sid, -1, stats,
                        risk_level=["none", "low", "moderate", "high", "imminent"][min(level, 4)])
+        # 上下文快照落 audit_trace（/api/traces/{sid} 与回放用）。
+        # 与上面两个 tracer 事件同属本轮一次性记录，必须在幂等键内，
+        # 否则 crisis / moderate 的二次调用会写出两条完全一样的记录。
+        add_trace(sid, "context", system[:1500], f"risk_level={level}")
 
     # 用户消息落库（幂等：同一轮只写一次，靠 msg_persisted_turn 判重）
     turn_key = f"{sid}:{len(state.get('messages', []))}"

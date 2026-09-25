@@ -15,7 +15,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Iterable
 
-from config import get_settings
+from config import RISK_LEVELS, get_settings
 from models import (
     DailyRecord,
     MessageRow,
@@ -353,7 +353,14 @@ def add_risk_flag(f: RiskFlag) -> int:
 
 def list_risk_flags(user_id: str | None = None, unhandled_only: bool = False,
                     min_level: int = 0, limit: int = 100) -> list[RiskFlag]:
-    levels = ["none", "low", "moderate", "high", "imminent"][max(min_level, 0):]
+    # min_level / limit 直接来自 query，必须 clamp。
+    #   min_level >= 5 时切片会让 levels 变空 -> 拼出 `level IN ()`；
+    #   SQLite（实测 3.45.2）**接受**空 IN 列表并返回 false，不报错，
+    #   于是接口静默返回空 —— 审核台会把 imminent 事件整个漏掉。
+    #   clamp 到最高等级，使越界请求退化为"只看最严重"而非"什么都看不到"。
+    min_level = max(0, min(int(min_level), len(RISK_LEVELS) - 1))
+    limit = max(1, min(int(limit), 500))
+    levels = list(RISK_LEVELS[min_level:])
     ph = ",".join("?" * len(levels))
     sql = f"SELECT * FROM risk_flag WHERE level IN ({ph})"
     args: list[Any] = [*levels]

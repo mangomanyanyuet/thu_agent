@@ -193,3 +193,12 @@ EMOTION_KEYWORD_MAP: dict[str, str] = {
     "还好": "平静", "平静": "平静", "放松": "平静",
     "累": "疲惫", "疲惫": "疲惫", "没劲": "疲惫", "撑不住": "疲惫",
 }
+
+# ---------------- 感知层阈值 ----------------
+# 语速显著下降（精神运动性抑制）阈值。真实语音只有 syllable_rate（音节/秒），
+# 陪伴会话聚合值还会附带换算出的 words_per_min（= syllable_rate × 60）。
+# ⚠ 与 asr.tone_label / perception.voice_risk_signal 的 3.0 **语义不同**：
+#   3.0 = "偏慢"（提示性），1.67 = "显著抑制"（与失眠共现才算风险信号）。
+#   两者都保留，不要合并。
+SLOW_SPEECH_SYLLABLE_RATE = 1.67
+SLOW_SPEECH_WORDS_PER_MIN = 100.0

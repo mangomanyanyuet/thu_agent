@@ -13,6 +13,8 @@ from typing import Any
 from config import (
     NEGATIVE_WORDS,
     POSITIVE_WORDS,
+    SLOW_SPEECH_SYLLABLE_RATE,
+    SLOW_SPEECH_WORDS_PER_MIN,
     get_settings,
 )
 from models import DailyRecord, DailySummary, ScaleScore
@@ -282,6 +284,27 @@ def rule_risk_level(text: str) -> tuple[int, str]:
     return 0, ""
 
 
+def _slow_speech(audio_features: dict[str, Any]) -> bool:
+    """语速是否显著下降（精神运动性抑制）。
+
+    三种来源的键名不一致，必须都认：
+      - 真实语音（asr.AudioFeatures）        ：只有 syllable_rate（音节/秒）
+      - 陪伴会话聚合（companion.daily_bridge）：syllable_rate + words_per_min
+      - 视频桩函数（analyze_video_stub）      ：只有 words_per_min（词/分）
+
+    ⚠ 原实现只读 `words_per_min`（缺失时默认 200），而 /api/daily 上报的
+    真实语音里根本没有这个键 —— 该链路上这条规则从未生效过。
+    """
+    sp = audio_features or {}
+    rate = sp.get("syllable_rate")
+    if isinstance(rate, (int, float)):
+        return rate < SLOW_SPEECH_SYLLABLE_RATE
+    wpm = sp.get("words_per_min")
+    if isinstance(wpm, (int, float)):
+        return wpm < SLOW_SPEECH_WORDS_PER_MIN
+    return False
+
+
 def multimodal_risk_signal(record: DailyRecord | None) -> tuple[int, str]:
     """多模态通道：从当日记录里找风险信号。"""
     if not record:
@@ -294,7 +317,7 @@ def multimodal_risk_signal(record: DailyRecord | None) -> tuple[int, str]:
     if na.get("tone") == "negative" and na.get("neg_hits", 0) >= 4:
         level = max(level, 1)
         signals.append(f"自述负面词密集({na['neg_hits']})")
-    if na.get("insomnia") and sp.get("words_per_min", 200) < 100:
+    if na.get("insomnia") and _slow_speech(sp):
         level = max(level, 1)
         signals.append("失眠 + 语速显著下降")
     if emo.get("sad", 0) > 0.6:

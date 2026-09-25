@@ -312,6 +312,31 @@ def list_scale_scores(user_id: str, scale_name: str | None = None, limit: int = 
     ]
 
 
+def latest_scale_score(user_id: str, scale_name: str) -> ScaleScore | None:
+    """最近一次量表得分（风险通道专用）。
+
+    ⚠ 不要用 `list_scale_scores(limit=1)` 代替：那个函数按 **date ASC** 排序
+    （供趋势图从旧到新画），limit=1 拿到的是**最早**一条 —— 风险通道因此
+    长期读陈旧分数，PHQ-9 第 9 题这种"后来才恶化"的情况会被整条漏掉。
+
+    同日可多次提交（date 相同），故按 id DESC 兜底取最后一次。
+    """
+    with tx() as c:
+        r = c.execute(
+            "SELECT * FROM scale_score WHERE user_id=? AND scale_name=?"
+            " ORDER BY date DESC, id DESC LIMIT 1",
+            (user_id, scale_name),
+        ).fetchone()
+    if not r:
+        return None
+    return ScaleScore(
+        id=r["id"], user_id=r["user_id"], date=r["date"], scale_name=r["scale_name"],
+        item_scores=_lj(r["item_scores"]), total_score=r["total_score"],
+        delta_vs_last=r["delta_vs_last"], delta_vs_baseline=r["delta_vs_baseline"],
+        severity=r["severity"], created_at=r["created_at"],
+    )
+
+
 # ---------------------------------------------------------------- risk_flag
 def add_risk_flag(f: RiskFlag) -> int:
     with tx() as c:

@@ -49,10 +49,10 @@ from storage import (
     add_risk_flag,
     add_trace,
     get_session,
+    latest_scale_score,
     list_daily_records,
     list_messages,
     list_risk_flags,
-    list_scale_scores,
     upsert_session,
 )
 
@@ -179,15 +179,19 @@ def risk_detector_node(state: AgentState) -> dict[str, Any]:
     rule_lvl, rule_ev = rule_risk_level(text)
 
     # 量表通道
+    # 必须取**最近一次**分数：list_scale_scores 按 date ASC 排序，limit=1 会
+    # 拿到最早一条，量表通道将长期读陈旧分数（PHQ-9 第 9 题后来恶化会被漏掉）。
+    # 证据里带上日期，让模型与审核员能感知这份分数有多旧。
     scale_lvl, scale_ev = 0, ""
     for name in ("PHQ-9", "GAD-7"):
-        hist = list_scale_scores(uid, name, limit=1)
-        if not hist:
+        last = latest_scale_score(uid, name)
+        if not last:
             continue
         from perception import scale_risk_signal
-        lvl, ev = scale_risk_signal(name, hist[-1].item_scores)
+        lvl, ev = scale_risk_signal(name, last.item_scores)
         if lvl > scale_lvl:
-            scale_lvl, scale_ev = lvl, ev
+            scale_lvl = lvl
+            scale_ev = f"{ev}（{last.date}）" if ev else ""
 
     # 多模态通道
     recs = list_daily_records(uid, limit=1)

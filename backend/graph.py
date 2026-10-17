@@ -56,6 +56,10 @@ from storage import (
     upsert_session,
 )
 
+# 风险等级数值 → 名称。与 models.RISK_LEVELS / tracer._RISK_NAMES 同序，
+# 抽成常量避免各处重复写列表字面量时写错顺序。
+_LEVEL_NAMES = ["none", "low", "moderate", "high", "imminent"]
+
 # ------------------------------------------------------------------ LLM 调用
 EMOTION_SYS = """你是情绪评估器。只输出 JSON，字段：
 primary_emotion(joy/calm/neutral/sadness/anxiety/anger/fear/shame/numbness),
@@ -210,10 +214,12 @@ def risk_detector_node(state: AgentState) -> dict[str, Any]:
     # ---- 可观测：记录非模型通道（规则/量表/多模态）的判定 ----
     import tracer
 
-    tracer.risk_channel(state["session_id"], -1, "规则", rule_lvl, rule_ev)
-    if scale_lvl:
-        tracer.risk_channel(state["session_id"], -1, "量表", scale_lvl, scale_ev)
-    tracer.risk_channel(state["session_id"], -1, "多模态", mm_lvl, mm_ev)
+    turn = state.get("turn", -1)
+    tracer.risk_channel(state["session_id"], turn, "规则", rule_lvl, rule_ev)
+    # 量表通道无条件记录：只在非零时打日志的话，日志里永远看不到第四通道，
+    # 与「四通道并集」的设计对不上，也没法确认它到底参没参与判定。
+    tracer.risk_channel(state["session_id"], turn, "量表", scale_lvl, scale_ev)
+    tracer.risk_channel(state["session_id"], turn, "多模态", mm_lvl, mm_ev)
 
     return {
         "risk_rule": {"level": rule_lvl, "evidence": rule_ev, "source": "rule"},
@@ -251,7 +257,7 @@ def context_builder_node(state: AgentState) -> dict[str, Any]:
 
     # primary_emotion 已是中文 8 类（EmotionLabel 统一后），无需再做英文映射
     tracer.emotion(
-        state["session_id"], -1,
+        state["session_id"], state.get("turn", -1),
         label=str(emotion_dict.get("primary_emotion") or "未知"),
         valence=float(emotion_dict.get("valence") or 0.0),
         arousal=float(emotion_dict.get("arousal") or 0.0),
@@ -262,7 +268,7 @@ def context_builder_node(state: AgentState) -> dict[str, Any]:
         distortions=emotion_dict.get("cognitive_distortions"),
         text_source="llm",
     )
-    tracer.risk_channel(state["session_id"], -1, "模型", model_lvl,
+    tracer.risk_channel(state["session_id"], state.get("turn", -1), "模型", model_lvl,
                         risk.get("evidence") or "",
                         has_ideation=risk.get("has_ideation"),
                         has_plan=risk.get("has_plan"),
@@ -291,7 +297,7 @@ def risk_gate(state: AgentState) -> str:
         dst = "cbt"
 
     tracer.transition(
-        state["session_id"], -1, "persist_flags", dst,
+        state["session_id"], state.get("turn", -1), "persist_flags", dst,
         condition=f"final_level={level}",
         reason={"crisis": "high 及以上，转危机协议并挂起等人工",
                 "moderate": "中度，CBT + 安全计划 + 热线",
@@ -335,16 +341,31 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
     _trace_key = f"{sid}:{len(state.get('messages', []))}:trace"
     traced = state.get("_traced_turn") == _trace_key
     if not traced:
+        # 上一轮等级只能取**持久化**值：state["risk_level"] 带 keep_max
+        # reducer，而 risk_detector / context_builder 都会写它，走进本节点时
+        # 它已经是"本轮"值了。拿它当 prev 会让 level > prev_level 永不成立，
+        # 「⚠ 升级」告警变成死代码（实测 none→high 仍只打印普通文案）。
+        prev_sess = get_session(sid)
+        prev_name = (prev_sess.last_risk if prev_sess else "") or ""
+        prev_level = (_LEVEL_NAMES.index(prev_name)
+                      if prev_name in _LEVEL_NAMES else None)
         tracer.risk_final(
-            sid, -1, level,
+            sid, state.get("turn", -1), level,
             {"rule": state.get("risk_rule", {}),
              "model": state.get("risk_model", {}),
              "multimodal": state.get("risk_multimodal", {}),
              "scale": state.get("risk_scale", {})},
-            prev_level=state.get("risk_level"),
+            prev_level=prev_level,
         )
-        tracer.context(sid, -1, stats,
-                       risk_level=["none", "low", "moderate", "high", "imminent"][min(level, 4)])
+        tracer.context(sid, state.get("turn", -1), stats,
+                       risk_level=_LEVEL_NAMES[min(level, 4)])
+        # 把本轮等级固化到会话记录，供**下一轮**取 prev_level。
+        # 原来只在收尾节点写 last_risk，而危机轮会被 interrupt 挂起、
+        # 收尾节点根本不执行 —— 于是它永远停在 none，之后每轮都误报"升级"。
+        sess_now = get_session(sid)
+        if sess_now is not None:
+            sess_now.last_risk = _LEVEL_NAMES[min(level, 4)]
+            upsert_session(sess_now)
         # 上下文快照落 audit_trace（/api/traces/{sid} 与回放用）。
         # 与上面两个 tracer 事件同属本轮一次性记录，必须在幂等键内，
         # 否则 crisis / moderate 的二次调用会写出两条完全一样的记录。
@@ -377,8 +398,21 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
     if detail.get("has_intent"):
         dims.append("有意图")
 
-    # 已存在的证据不再重复写（跨轮去重）
-    existing = {(f.source, f.evidence) for f in list_risk_flags(user_id=uid, limit=200)}
+    # 已存在的证据不再重复写。
+    #
+    # ⚠ 去重范围必须按证据性质分开，否则不是漏报就是刷屏：
+    #   · rule / model / multimodal = 用户**本轮说的话**，属急性事件。
+    #     原先按 user 级永久去重、且把已处理（handled）的记录也算作"已存在"，
+    #     后果是同一用户第二次说出同样的危机话术**永远不会再进审核队列**
+    #     （实测：新会话连跑 3 个危机轮，审核队列 0 条 —— 直接漏报）。
+    #     改为只在同一会话内、且该条仍未处理时去重：换会话就是新事件，
+    #     已处理的事件再次发生也算新事件。
+    #   · scale_item = 量表分数触发，属持续状态。同一份分数会每轮重复命中，
+    #     必须按 user 级去重，否则审核队列被同一条分数刷屏。
+    flags = list_risk_flags(user_id=uid, limit=500)
+    dup_session = {(f.source, f.evidence)
+                   for f in flags if f.session_id == sid and not f.handled}
+    dup_user = {(f.source, f.evidence) for f in flags}
     sources = [
         ("rule", state.get("risk_rule", {}).get("evidence", "")),
         ("model", state.get("risk_model", {}).get("evidence", "")),
@@ -386,7 +420,8 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
         ("scale_item", state.get("risk_scale", {}).get("evidence", "")),
     ]
     for src, ev in sources:
-        if ev and (src, ev) not in existing:
+        dup = dup_user if src == "scale_item" else dup_session
+        if ev and (src, ev) not in dup:
             add_risk_flag(RiskFlag(
                 id=None, user_id=uid, session_id=sid, ts=now_iso(), source=src,
                 evidence=ev, level=level_name, cssrs_dimension="/".join(dims),
@@ -435,7 +470,7 @@ def safe_fallback_reply(level: int) -> str:
 
 def crisis_node(state: AgentState) -> dict[str, Any]:
     """危机协议：停止探索式提问，给热线，挂起等人工。"""
-    from llm import complete, was_degraded
+    from llm import complete, using_mock, was_degraded
     persist_risk_flags(state)
 
     s = get_settings()
@@ -451,7 +486,14 @@ def crisis_node(state: AgentState) -> dict[str, Any]:
         + "6. 全程语气平稳、温暖、简短。"
     )
     reply = complete(system, _llm_messages(state))
-    if not reply or was_degraded():
+    # 红线 4：只要不是真实模型生成的，就必须换成热线兜底话术。
+    #
+    # 只判 was_degraded() 不够 —— mock 模式下它恒为 False（没配真实模型，
+    # 压根不会抛异常），于是会把 MockLLM 的 CBT 台词当成危机干预发出去。
+    # 而 MockLLM.complete 只看**最后一句话**判风险：会话里累积了历史危机句
+    # 之后，末句哪怕是"我今天吃了苹果"，本轮 final_level 仍是 high，
+    # 却会拿到一句"谢谢你愿意跟我说这些"（实测复现）。
+    if using_mock() or not reply or was_degraded():
         reply = safe_fallback_reply(final_level(state))
 
     return {
@@ -485,7 +527,7 @@ def human_review_node(state: AgentState) -> dict[str, Any]:
 
 def moderate_node(state: AgentState) -> dict[str, Any]:
     """中度：CBT + 共同制定安全计划 + 提供热线。"""
-    from llm import complete, was_degraded
+    from llm import complete, using_mock, was_degraded
     persist_risk_flags(state)
 
     lines = "\n".join(f"- {h['name']} {h['number']}" for h in hotlines())
@@ -501,7 +543,9 @@ def moderate_node(state: AgentState) -> dict[str, Any]:
         + "6. 语气温和、不评判、一次只问一个问题。"
     )
     reply = complete(system, _llm_messages(state))
-    if not reply or was_degraded():
+    # 同 crisis_node：mock 下 was_degraded() 恒为 False，必须用 using_mock()
+    # 兜住，否则中度分支也会发出 mock 的通用 CBT 台词。
+    if using_mock() or not reply or was_degraded():
         reply = safe_fallback_reply(2)
     return {"reply": reply, "crisis_mode": False, "hotlines": hotlines()}
 
@@ -525,7 +569,8 @@ def cbt_node(state: AgentState) -> dict[str, Any]:
     import tracer
 
     tracer.cbt_stage(state["session_id"], stage,
-                     CBT_NEXT.get(stage, CBTStage.affect_labeling.value))
+                     CBT_NEXT.get(stage, CBTStage.affect_labeling.value),
+                     turn=state.get("turn", -1))
     return {
         "reply": reply,
         "crisis_mode": False,
@@ -626,7 +671,7 @@ def memory_writer_node(state: AgentState) -> dict[str, Any]:
     # 6) 可观测：本轮收尾
     import tracer
 
-    tracer.memory_write(sid, uid, facts_dict, None)
+    tracer.memory_write(sid, uid, facts_dict, None, turn=state.get("turn", -1))
 
     return {
         "rolling_summary": summary,
@@ -729,9 +774,14 @@ def run_turn(user_id: str, session_id: str, user_text: str,
     import tracer
 
     prev_sess = get_session(session_id)
+    # 轮次号按**用户消息数**算，不能用 len(messages)//2：
+    # 危机轮会被 interrupt 挂起、助手消息根本不落库，除法会算重
+    # （实测第 4 轮仍被标成第 3 轮）。
+    turn_no = sum(1 for m in list_messages(session_id, limit=200)
+                  if getattr(m, "role", "") == "user") + 1
     tracer.turn_start(
         session_id, user_id,
-        turn=len(list_messages(session_id, limit=200)) // 2 + 1,
+        turn=turn_no,
         text=user_text or "(resume)",
     )
 
@@ -744,6 +794,7 @@ def run_turn(user_id: str, session_id: str, user_text: str,
             {
                 "user_id": user_id,
                 "session_id": session_id,
+                "turn": turn_no,
                 "messages": [{"role": "user", "content": user_text}],
                 "rolling_summary": (get_session(session_id).summary
                                     if get_session(session_id) else ""),
@@ -759,7 +810,7 @@ def run_turn(user_id: str, session_id: str, user_text: str,
     from llm import was_degraded
 
     latency_ms = int((_time.monotonic() - _t0) * 1000)
-    tracer.turn_end(session_id, -1, latency_ms,
+    tracer.turn_end(session_id, turn_no, latency_ms,
                     len(out.get("reply", "")),
                     crisis=bool(out.get("crisis_mode")),
                     degraded=was_degraded())

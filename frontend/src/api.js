@@ -134,12 +134,18 @@ export const api = {
  */
 export function streamChat({ userId, sessionId, text, voice }, handlers) {
   return new Promise((resolve, reject) => {
+    // 必须带鉴权头：后端 auth_middleware 对白名单外的 /api/* 强制校验 token，
+    // 漏了就是 401（这里曾漏过，表现为"发消息没回复"）。
     fetch(`${BASE}/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ user_id: userId, session_id: sessionId, text, voice }),
     })
       .then((res) => {
+        if (res.status === 401) {
+          onUnauthorized()
+          throw new Error('登录已过期，请重新登录')
+        }
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const reader = res.body.getReader()
         const decoder = new TextDecoder()

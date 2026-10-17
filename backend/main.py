@@ -267,9 +267,23 @@ def chat_stream(req: ChatRequest):
 
 @app.get(f"{settings.api_prefix}/asr/status")
 def asr_status():
-    """ASR 可用性（前端据此决定麦克风按钮是否可用）。"""
+    """ASR 可用性（前端据此决定麦克风按钮是否可用）。
+
+    `available` 只代表包装了；`model_ready` 才代表权重已在本地、转写不会
+    静默返回空文本。两者不一致时必须给出可操作的提示，否则按钮亮着却
+    永远识别不出内容。
+    """
     import asr
-    return {"available": asr.asr_available(), "model": asr.ASR_MODEL_SIZE}
+    ready = asr.model_ready()
+    hint = ""
+    if not asr.asr_available():
+        hint = "未安装 faster-whisper：pip install faster-whisper"
+    elif not ready:
+        hint = ("模型未就绪，首次转写需联网下载（约 460MB）。若无法访问 "
+                "huggingface.co，可设 HF_ENDPOINT=https://hf-mirror.com 与 "
+                "HF_HUB_DISABLE_XET=1 后重启后端")
+    return {"available": asr.asr_available(), "model_ready": ready,
+            "model": asr.ASR_MODEL_SIZE, "hint": hint}
 
 
 @app.post(f"{settings.api_prefix}/asr")

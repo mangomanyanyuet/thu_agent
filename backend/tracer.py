@@ -181,11 +181,11 @@ def phase(session_id: str, src: str, dst: str, reason: str = "") -> None:
         session_id=session_id, **{"from": src}, to=dst, reason=reason)
 
 
-def cbt_stage(session_id: str, src: str, dst: str) -> None:
+def cbt_stage(session_id: str, src: str, dst: str, turn: int = -1) -> None:
     if src == dst:
         return
     log("cbt.stage", f"CBT 阶段：{src} → {dst}",
-        session_id=session_id, **{"from": src}, to=dst)
+        session_id=session_id, turn=turn, **{"from": src}, to=dst)
 
 
 def context(session_id: str, turn: int, stats: dict, risk_level: str = "") -> None:
@@ -195,11 +195,12 @@ def context(session_id: str, turn: int, stats: dict, risk_level: str = "") -> No
         session_id=session_id, turn=turn, risk_level=risk_level, **stats)
 
 
-def memory_write(session_id: str, user_id: str, facts: dict, baseline: dict = None) -> None:
+def memory_write(session_id: str, user_id: str, facts: dict, baseline: dict = None,
+                 turn: int = -1) -> None:
     n = sum(len(v) for v in (facts or {}).values() if isinstance(v, list))
     log("memory.write", f"记忆写入：{n} 条事实" +
         (f"，情绪基线 v={baseline.get('valence')} a={baseline.get('arousal')}" if baseline else ""),
-        session_id=session_id, user_id=user_id, facts=facts, baseline=baseline)
+        session_id=session_id, turn=turn, user_id=user_id, facts=facts, baseline=baseline)
 
 
 def turn_end(session_id: str, turn: int, latency_ms: int, reply_len: int,

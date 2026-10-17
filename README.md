@@ -26,8 +26,15 @@ cd ../frontend && npm install && npm run dev      # 开发
 # npm run build 后，后端 :8000 会直接托管 dist/
 ```
 
-语音输入需额外装：`pip install faster-whisper`（首次自动下载 `small` 模型）。
+语音输入需额外装：`pip install faster-whisper`（首次自动下载 `small` 模型，约 460MB）。
 不装也能跑，只是麦克风不可用。
+
+> 模型是首次转写时才懒下载的。`huggingface.co` 不可达时会**静默返回空文本**
+> （接口仍 200），麦克风看着正常但识别不出内容。此时用镜像拉一次即可：
+> `HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 python3 -c "import asr; asr.get_model()"`
+> 两个变量都要设 —— 只设 `HF_ENDPOINT` 会走 Xet 存储报 401。
+> 拉过一次后就在本地缓存了，之后无需再设。`/api/asr/status` 的 `model_ready`
+> 会明确告诉你权重是否就绪。
 
 ---
 

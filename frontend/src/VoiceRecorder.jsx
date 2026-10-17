@@ -31,7 +31,7 @@ export function pickMime() {
 
 export default function VoiceRecorder({ onResult, onError }) {
   const [supported, setSupported] = useState(false)
-  const [asrOk, setAsrOk] = useState(null)
+  const [asrStat, setAsrStat] = useState(null)
   const [recording, setRecording] = useState(false)
   const [busy, setBusy] = useState(false)
   const [elapsed, setElapsed] = useState(0)
@@ -50,9 +50,15 @@ export default function VoiceRecorder({ onResult, onError }) {
     const diag = mediaDiagnosis()
     setDiag(diag)
     setSupported(diag.ok)
-    api.asrStatus().then((r) => setAsrOk(r.available)).catch(() => setAsrOk(false))
+    api.asrStatus().then(setAsrStat).catch(() =>
+      setAsrStat({ available: false, model_ready: false, hint: '' })
+    )
     return () => stopMetering()
   }, [])
+
+  // 装了包只是前提，权重在本地缓存里才真能转写。
+  // 只看 available 会出现"按钮亮着但永远识别不出内容"。
+  const asrBlocked = asrStat ? !(asrStat.available && asrStat.model_ready !== false) : false
 
   const stopMetering = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current)
@@ -152,8 +158,8 @@ export default function VoiceRecorder({ onResult, onError }) {
         <button
           className={recording ? 'mic rec' : 'mic'}
           onClick={() => (recording ? stop() : start())}
-          disabled={!supported || busy || asrOk === false}
-          title={asrOk === false ? '后端未启用 ASR' : '点击录音'}
+          disabled={!supported || busy || asrBlocked}
+          title={asrBlocked ? '后端 ASR 未就绪' : '点击录音'}
         >
           {recording ? '■' : '🎙'}
         </button>
@@ -166,8 +172,8 @@ export default function VoiceRecorder({ onResult, onError }) {
           )}
           {!busy && !recording && !result && (
             <span className="muted small">
-              {asrOk === false
-                ? '后端 ASR 未启用（pip install faster-whisper）'
+              {asrBlocked
+                ? asrStat?.hint || '后端 ASR 未启用（pip install faster-whisper）'
                 : '点击麦克风说话，自动转文字并分析语气'}
             </span>
           )}
@@ -181,6 +187,12 @@ export default function VoiceRecorder({ onResult, onError }) {
           {!busy && result && (
             <div className="voice-result">
               <div className="transcript">“{result.text || '（未识别出内容）'}”</div>
+              {/* 失败必须说清是"没说话"还是"模型没下载"，否则无法自查 */}
+              {result.asr_error && (
+                <div className="muted small reason" style={{ color: '#b45309' }}>
+                  ⚠️ {result.asr_error}
+                </div>
+              )}
               <div className="voice-meta">
                 <span className="chip" style={{ color: tone.color, background: tone.bg }}>
                   {tone.icon} {tone.label}

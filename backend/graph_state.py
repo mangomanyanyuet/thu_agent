@@ -60,6 +60,9 @@ class AgentState(TypedDict, total=False):
     risk_level: Annotated[int, keep_max]   # 并集后的最终等级数值（只升不降）
     risk_evidence: Annotated[list[str], merge_evidence]
     risk_detail: dict[str, Any]
+    # 本轮轮次号（1 起）。由 run_turn 注入，供 tracer 事件打标 ——
+    # 此前各节点硬编码 -1，日志无法按轮次聚合。
+    turn: int
     _persisted_turn: str      # 幂等键：本轮是否已落库用户消息
     _traced_turn: str         # 幂等键：本轮是否已写过追踪日志（防 crisis/moderate 重复记）
 

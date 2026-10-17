@@ -136,17 +136,21 @@ class CompanionEngine:
         _log_emotion(fused, "keyword")
 
         # ---- 2) 风险（独立于生成，PRD §7.5）----
-        risk_lvl, risk_ev = self._detect_risk(user_text, audio, face, fused)
+        risk_lvl, risk_ev, risk_ch = self._detect_risk(user_text, audio, face, fused)
 
         import tracer
 
-        prev_lvl = s.risk_level
+        # prev_level 必须恒传实际值。原来只在等级变化时传、否则传 None，
+        # 结果日志里绝大多数行 prev_level 都是 null，"只升不降"根本没法核对。
+        prev_lvl = s.risk_level or "none"
+        _LVL2NUM = {"none": 0, "watch": 1, "high": 3}
         tracer.risk_final(s.session_id, turn_id,
-                          {"none": 0, "watch": 1, "high": 3}.get(risk_lvl, 0),
-                          {"规则": {"level": risk_lvl}, "模型": {"level": risk_lvl},
-                           "多模态": {"level": risk_lvl}},
-                          prev_level={"none": 0, "watch": 1, "high": 3}.get(prev_lvl, 0)
-                          if prev_lvl != risk_lvl else None)
+                          _LVL2NUM.get(risk_lvl, 0),
+                          {name: {"level": lvl} for name, lvl in risk_ch.items()},
+                          prev_level=_LVL2NUM.get(prev_lvl, 0))
+        # 逐通道记录：合并后再复制一份给三个通道会掩盖真正的触发来源
+        for name, lvl in risk_ch.items():
+            tracer.risk_channel(s.session_id, turn_id, name, lvl, "")
         for ev in risk_ev:
             tracer.risk_channel(s.session_id, turn_id, "证据", risk_lvl, ev)
 
@@ -336,10 +340,32 @@ class CompanionEngine:
 
     # ---------------------------------------------------------------- 风险
     def _detect_risk(self, text: str, audio: dict | None, face: dict | None,
-                     fused: dict) -> tuple[str, list[str]]:
-        """PRD §7.5.2 三通道并集升级，返回 (none|watch|high, 证据)。"""
+                     fused: dict) -> tuple[str, list[str], dict[str, str]]:
+        """PRD §7.5.2 三通道并集升级。
+
+        返回 (none|watch|high, 证据, 逐通道等级)。逐通道等级必须一并返回：
+        之前只回传合并后的等级，日志把同一个值复制给三个通道，看起来像
+        "三路都这么判"，实际掩盖了到底是哪一路触发的。
+        """
         evidence: list[str] = []
         levels = []
+        rule_lvl = model_lvl = mm_lvl = 0
+
+        def _name(n: int) -> str:
+            return "high" if n >= 2 else ("watch" if n >= 1 else "none")
+
+        def _pack(evaluated: tuple[str, ...] = ("规则", "模型", "多模态")) -> dict[str, str]:
+            """组装逐通道等级。
+
+            规则/模型通道命中 high 时会短路返回，后面的通道其实**没被评估**。
+            这时不能填 none —— 那会让审核员以为"模型看过、判为无风险"。
+            """
+            out = {"规则": _name(rule_lvl), "模型": _name(model_lvl),
+                   "多模态": _name(mm_lvl)}
+            for k in list(out):
+                if k not in evaluated:
+                    out[k] = "未评估"
+            return out
 
         # 通道 1：文本规则（分级词表）
         rule_lvl, rule_ev = rule_risk_level(text)
@@ -349,7 +375,7 @@ class CompanionEngine:
                 evidence.append(f"[文本规则] {rule_ev}")
         # 规则引擎判为 moderate 及以上（有主动意念/计划/准备）即 high
         if rule_lvl >= 2:
-            return "high", evidence
+            return "high", evidence, _pack(("规则",))
 
         # 通道 2：模型语义（隐晦表达、隐喻、反讽）
         model_lvl, model_ev = 0, ""
@@ -369,31 +395,34 @@ class CompanionEngine:
             levels.append(model_lvl)
             if model_ev:
                 evidence.append(f"[模型语义] {model_ev}")
-            return "high", evidence
+            return "high", evidence, _pack(("规则", "模型"))
 
         # 通道 3：多模态（声学 + 面部不一致）
         tone = (audio or {}).get("tone", "") if audio else ""
         v_lvl, v_ev = voice_risk_signal(tone, audio or {}, text)
         if v_lvl:
             levels.append(v_lvl)
+            mm_lvl = max(mm_lvl, v_lvl)
             if v_ev:
                 evidence.append(f"[语音声学] {v_ev}")
         # 面部持续低落 + 文本消极 -> watch
         f_label = (face or {}).get("blendshapes") and fused.get("label")
         if f_label in ("低落",) and fused.get("valence", 0) < -0.5:
             levels.append(1)
+            mm_lvl = max(mm_lvl, 1)
             evidence.append("[面部表情] 持续低落且效价显著偏负")
 
-        # 轻度消极关键词 -> watch
+        # 轻度消极关键词 -> watch（证据标的是 [文本规则]，归规则通道）
         watch_words = ["没意思", "没意义", "撑不住", "活不下去", "累死了",
                        "不想动", "没有人在乎", "我是负担"]
         if any(w in text for w in watch_words):
             levels.append(1)
+            rule_lvl = max(rule_lvl, 1)
             evidence.append(f"[文本规则] 持续消极表达")
 
         if not levels:
-            return "none", []
-        return ("high" if max(levels) >= 2 else "watch"), evidence
+            return "none", [], _pack()
+        return ("high" if max(levels) >= 2 else "watch"), evidence, _pack()
 
     # ---------------------------------------------------------------- 沉默
     def silence_check(self) -> str | None:

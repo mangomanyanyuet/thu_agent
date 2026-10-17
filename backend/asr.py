@@ -26,6 +26,11 @@ ASR_MODEL_SIZE = "small"
 ASR_DEVICE = "cpu"
 ASR_COMPUTE = "int8"
 
+# faster-whisper 的 "small" 对应的权重仓库（用于离线就绪探测）
+ASR_MODEL_REPO = "Systran/faster-whisper-small"
+# 这几个文件缺一个，faster-whisper 都会尝试联网补齐
+ASR_MODEL_FILES = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
+
 _model = None
 
 
@@ -46,6 +51,42 @@ def asr_available() -> bool:
         return True
     except Exception:
         return False
+
+
+def model_ready() -> bool:
+    """权重是否已在本地缓存（离线可直接加载）。
+
+    `asr_available()` 只说明包装了 —— 权重是首次 transcribe 才懒加载的
+    （约 460MB）。网络不通时下载失败会走 except 分支静默返回空文本，前端
+    只看到「未识别出内容」，很难定位。状态接口必须把「没装包」和「装了但
+    权重下不来」分开，否则麦克风按钮亮着却永远识别不出东西。
+    """
+    if not asr_available():
+        return False
+    try:
+        from huggingface_hub import try_to_load_from_cache
+    except Exception:  # noqa: BLE001
+        return True  # 老版本 hub 没有该 API，判断不了就按可用处理
+    for name in ASR_MODEL_FILES:
+        p = try_to_load_from_cache(ASR_MODEL_REPO, name)
+        # 命中返回路径字符串；未缓存返回 None，确认不存在返回哨兵对象
+        if not isinstance(p, str):
+            return False
+    return True
+
+
+def _asr_error_hint(exc: Exception) -> str:
+    """把转写异常压成一句能指导下一步操作的话。"""
+    raw = str(exc).strip()
+    first = raw.splitlines()[0] if raw else exc.__class__.__name__
+    # 权重拉取失败的典型特征：连不上 Hub，或本地找不到对应 revision 的快照
+    offline = ("ConnectTimeout" in raw or "ConnectionError" in raw
+               or "cannot find the appropriate snapshot" in raw
+               or "LocalEntryNotFoundError" in raw)
+    if offline:
+        return (f"模型未下载（{first}）。若无法访问 huggingface.co，可设 "
+                "HF_ENDPOINT=https://hf-mirror.com 与 HF_HUB_DISABLE_XET=1 后重启后端")
+    return f"转写失败：{first}"
 
 
 # ------------------------------------------------------------------ 解码
@@ -309,16 +350,24 @@ TONE_TEXT = {
 
 # ------------------------------------------------------------------ 对外主入口
 def transcribe(data: bytes, language: str = "zh") -> dict[str, Any]:
-    """音频字节 -> {text, audio_features, tone, tone_reason, summary}。
+    """音频字节 -> {text, audio_features, tone, tone_reason, summary, asr_error}。
 
     ASR 失败时 text 为空，但声学特征仍会尽量返回 —— 特征不依赖 ASR，
     即使转写失败，语气信息也能进入风险判定的多模态通道。
+
+    失败原因通过 `asr_error` 回传：只 print 到日志的话，前端只会显示
+    「未识别出内容」，用户无从区分「没说话」和「模型没下载」。
     """
     x = decode_audio(data, SAMPLE_RATE)
     feats = extract_features(x, SAMPLE_RATE)
     tone, reason = tone_label(feats)
 
     text = ""
+    asr_error = ""
+    if not asr_available():
+        asr_error = "未安装 faster-whisper（pip install faster-whisper）"
+    elif x.size == 0:
+        asr_error = "音频解码后为空"
     if x.size > 0 and asr_available():
         try:
             model = get_model()
@@ -339,6 +388,7 @@ def transcribe(data: bytes, language: str = "zh") -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             # 转写失败不能拖垮对话：文本为空，特征照常返回
             print(f"[asr] 转写失败: {exc}")
+            asr_error = _asr_error_hint(exc)
 
     summary_parts = [f"时长 {feats.duration_sec}s"]
     if feats.syllable_rate:
@@ -355,4 +405,5 @@ def transcribe(data: bytes, language: str = "zh") -> dict[str, Any]:
         "tone": tone,
         "tone_reason": reason,
         "summary": "；".join(summary_parts),
+        "asr_error": asr_error,
     }

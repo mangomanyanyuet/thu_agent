@@ -725,8 +725,25 @@ def was_degraded() -> bool:
 
     危机分支据此判断「这句话不是模型生成的」，必须换成兜底话术，
     不能把 mock 的 CBT 台词当成危机干预回复发出去（红线 4）。
+
+    ⚠ 只靠它不够：LLM_PROVIDER=mock 时 get_llm() 直接返回 MockLLM，
+    不抛异常、也就不算"降级"，was_degraded() 恒为 False。判断
+    "当前是不是在用 mock" 请用 using_mock()。
     """
     return _degraded.get()
+
+
+def using_mock() -> bool:
+    """当前生效的实现是不是离线兜底的 MockLLM。
+
+    与 was_degraded() 的区别：was_degraded() 只覆盖"真实模型挂了"这一种情况，
+    覆盖不到"压根就没配真实模型"（默认 LLM_PROVIDER=mock）。危机/中度分支
+    必须同时看这两个信号，否则会拿到 MockLLM 的 CBT 台词当干预回复。
+    """
+    try:
+        return isinstance(get_llm(), MockLLM)
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def get_llm():

@@ -257,7 +257,10 @@ def update_daily_record(r: DailyRecord) -> None:
 def list_daily_records(user_id: str, limit: int = 30) -> list[DailyRecord]:
     with tx() as c:
         rows = c.execute(
-            "SELECT * FROM daily_record WHERE user_id=? ORDER BY date DESC LIMIT ?",
+            # 二级排序键 id DESC：同一天可能有多条（种子数据 + 聊天/陪伴收尾
+            # 各写一条），没有它就会稳定取到当天**最先**写入的那条。
+            "SELECT * FROM daily_record WHERE user_id=? "
+            "ORDER BY date DESC, id DESC LIMIT ?",
             (user_id, limit),
         ).fetchall()
     return [

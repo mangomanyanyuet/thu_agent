@@ -12,9 +12,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import perception  # noqa: E402
 import storage  # noqa: E402
+from config import get_settings  # noqa: E402
 from models import RiskFlag, UserProfile, now_iso  # noqa: E402
 
-USER = "demo_user"
+# ⚠ user_id 必须与账号体系一致：auth.register/login 用的是
+# `user_id = f"u_{username}"`（见 auth.py），演示账号默认 username=demo，
+# 所以这里是 "u_demo"。
+#
+# 此前写死 "demo_user"，两者对不上，后果是：14 天每日记录、PHQ-9/GAD-7
+# 分数、画像全部挂在另一个 user_id 名下。登录用户在会话里
+# latest_scale_score() 恒为 None、list_daily_records() 为空 —— 于是
+# **量表通道与多模态通道永远读不到信号**（日志里这两个通道恒为 none），
+# README 体验路径第 5 条「PHQ-9 第 9 题选到 2 或 3 触发风险」根本跑不出来。
+USER = f"u_{get_settings().demo_username}"
 
 
 def main() -> None:

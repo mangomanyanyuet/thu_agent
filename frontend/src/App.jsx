@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, session } from './api.js'
 import LoginView from './views/LoginView.jsx'
 import CompanionView from './views/CompanionView.jsx'
@@ -29,12 +29,18 @@ export default function App() {
   const [sessionId, setSessionId] = useState(localStorage.getItem('mt_sid') || '')
   const [overview, setOverview] = useState(null)
   const [health, setHealth] = useState(null)
+  const [sessions, setSessions] = useState([])
+  // 当前视图（对话 / 陪伴）刚上报的本轮风险等级
+  const [liveRisk, setLiveRisk] = useState('')
   const [error, setError] = useState('')
+  const creatingRef = useRef(null)
 
   const userId = auth.user_id || ''
 
   useEffect(() => {
     if (sessionId) localStorage.setItem('mt_sid', sessionId)
+    // 换会话就丢弃上一轮的实时等级，避免沿用旧值
+    setLiveRisk('')
   }, [sessionId])
 
   // 任意请求返回 401 时回到登录页（api.js 会派发该事件）
@@ -47,9 +53,14 @@ export default function App() {
   const refreshOverview = useCallback(async () => {
     if (!userId) return
     try {
-      const [ov, h] = await Promise.all([api.overview(userId), api.health()])
+      const [ov, h, sl] = await Promise.all([
+        api.overview(userId),
+        api.health(),
+        api.listSessions(userId).catch(() => []),
+      ])
       setOverview(ov)
       setHealth(h)
+      setSessions(sl || [])
       setError('')
     } catch (e) {
       setError(String(e.message || e))
@@ -60,12 +71,24 @@ export default function App() {
     refreshOverview()
   }, [refreshOverview])
 
-  const ensureSession = async () => {
+  // 并发保护：两次调用都读到 sessionId 为空时会各建一个会话，
+  // 后一次 setSessionId 生效 -> 顶部徽章指向那个从未使用的空会话，
+  // 表现就是"真实会话已经 high，徽章却一直显示无风险"。
+  const ensureSession = useCallback(async () => {
     if (sessionId) return sessionId
-    const { session_id: sid } = await api.createSession(userId)
-    setSessionId(sid)
-    return sid
-  }
+    if (creatingRef.current) return creatingRef.current
+    creatingRef.current = (async () => {
+      try {
+        const { session_id: sid } = await api.createSession(userId)
+        setSessionId(sid)
+        refreshOverview() // 让顶部徽章拿到新会话的等级
+        return sid
+      } finally {
+        creatingRef.current = null
+      }
+    })()
+    return creatingRef.current
+  }, [sessionId, userId, refreshOverview])
 
   const handleLogout = async () => {
     try {
@@ -77,6 +100,8 @@ export default function App() {
     localStorage.removeItem('mt_sid')
     setSessionId('')
     setOverview(null)
+    setSessions([])
+    setLiveRisk('')
     setAuth({ token: '', user_id: '', username: '' })
     setTab('companion')
   }
@@ -86,8 +111,16 @@ export default function App() {
     return <LoginView onAuthed={setAuth} />
   }
 
-  const latestRisk =
-    overview?.risk_flags?.filter((f) => !f.handled).slice(0, 1)[0]?.level || 'none'
+  // 「当前风险」= 当前正在进行中的会话的等级，优先级：
+  //   1) liveRisk —— 当前视图（对话/陪伴）刚上报的实时等级，最直接；
+  //   2) 当前会话持久化的 session.last_risk。
+  // 不能只查 session 表：陪伴会话是 cmp_*，**根本不写 session 表**，
+  // 在陪伴页按 sessionId 查会永远得到 none。
+  // 也不能退回"全局最新未处理 flag"：那样只要历史上出现过一次危机且未审核，
+  // 新建会话后顶部就永远挂着「重度」，与实际会话状态无关。
+  // 历史未处理事件另有去处 ——「人工审核台」页与标签页红点。
+  const currentSession = (sessions || []).find((s) => s.id === sessionId)
+  const latestRisk = liveRisk || currentSession?.last_risk || 'none'
   const risk = RISK_META[latestRisk] || RISK_META.none
 
   const Active = TABS.find((t) => t.key === tab).comp
@@ -118,11 +151,20 @@ export default function App() {
             onClick={async () => {
               const sid = await api.createSession(userId)
               setSessionId(sid)
+              refreshOverview()
             }}
           >
             新会话
           </button>
-          <span className="badge" style={{ color: risk.color, background: risk.bg }}>
+          <span
+            className="badge"
+            style={{ color: risk.color, background: risk.bg }}
+            title={
+              sessionId
+                ? `当前会话 ${sessionId} 的风险等级。历史未处理事件请见「人工审核台」`
+                : '尚未创建会话。历史未处理事件请见「人工审核台」'
+            }
+          >
             当前风险：{risk.label}
           </span>
           {health && (
@@ -158,6 +200,7 @@ export default function App() {
           ensureSession={ensureSession}
           overview={overview}
           refresh={refreshOverview}
+          onRisk={setLiveRisk}
         />
       </main>
 

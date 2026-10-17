@@ -198,8 +198,15 @@ def risk_detector_node(state: AgentState) -> dict[str, Any]:
             scale_ev = f"{ev}（{last.date}）" if ev else ""
 
     # 多模态通道
-    recs = list_daily_records(uid, limit=1)
-    mm_lvl, mm_ev = multimodal_risk_signal(recs[0] if recs else None)
+    # 每日记录有两种来源：种子/量表类带完整视频+音频特征，聊天收尾写的只有
+    # {"source":"chat"}、video/audio 均为空。只取最新一条会撞上后者，
+    # 多模态通道就永远读到空数据（日志里恒为 none）。这里取最近若干条中
+    # 第一条**真正带多模态特征**的。
+    mm_lvl, mm_ev = 0, ""
+    for rec in list_daily_records(uid, limit=7):
+        if (rec.video_features or {}).get("emotion_dist") or (rec.audio_features or {}):
+            mm_lvl, mm_ev = multimodal_risk_signal(rec)
+            break
     if state.get("modality_inconsistent"):
         mm_lvl = max(mm_lvl, 1)
         mm_ev = (mm_ev + "；" if mm_ev else "") + "模态不一致（掩饰倾向）"

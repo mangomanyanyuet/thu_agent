@@ -11,7 +11,7 @@ const TONE_SHORT = {
   unknown: '语音',
 }
 
-export default function ChatView({ userId, sessionId, ensureSession, refresh }) {
+export default function ChatView({ userId, sessionId, ensureSession, refresh, onRisk }) {
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -60,6 +60,9 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh }) 
       await streamChat({ userId, sessionId: sid, text, voice: thisVoice }, {
         onMeta: (meta) => {
           setLive(meta)
+          // 上报给顶部徽章：危机轮会被 interrupt 挂起，收尾节点不执行，
+          // 光靠刷新 session.last_risk 不保证及时
+          onRisk?.(meta.risk_level || '')
           if (meta.interrupted) setPending(meta.pending_review)
         },
         onDelta: (t) => {

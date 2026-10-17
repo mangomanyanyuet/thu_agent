@@ -15,7 +15,7 @@ const PHASE_LABEL = {
   done: '已完成',
 }
 
-export default function CompanionView({ userId, refresh }) {
+export default function CompanionView({ userId, refresh, onRisk }) {
   const [step, setStep] = useState('consent') // consent|quality|talking|report
   const [finishResult, setFinishResult] = useState(null)
   const [sid, setSid] = useState('')
@@ -204,6 +204,8 @@ export default function CompanionView({ userId, refresh }) {
       setMsgs((m) => [...m, { role: 'assistant', content: r.reply }])
       setVoice(null)
       setVoiceKey((k) => k + 1)
+      // 陪伴会话是 cmp_*，不写 session 表，顶部徽章只能靠这里上报
+      onRisk?.(r.risk_level || '')
       if (r.should_finish) await finish()
     } catch (e) {
       setErr(String(e.message || e))
@@ -247,6 +249,7 @@ export default function CompanionView({ userId, refresh }) {
         onRestart={() => {
           setStep('consent'); setMsgs([]); setReport(null)
           setFinishResult(null); setElapsed(0); setSid('')
+          onRisk?.('none')
         }}
       />
     )

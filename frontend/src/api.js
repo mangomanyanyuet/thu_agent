@@ -98,6 +98,8 @@ export const api = {
     req(`/companion/${sid}/quality`, { method: 'POST', body: JSON.stringify(quality) }),
   companionTurn: (sid, payload) =>
     req(`/companion/${sid}/turn`, { method: 'POST', body: JSON.stringify(payload) }),
+  // 静默阶梯：{prompt, action: none|nudge|confirm|end, idle_sec, phase, elapsed}
+  companionSilence: (sid) => req(`/companion/${sid}/silence`),
   companionReport: (sid) => req(`/companion/${sid}/report`),
   // 收尾：沉淀每日记录 + 更新画像 + 更新风险趋势（幂等）
   companionFinish: (sid) =>

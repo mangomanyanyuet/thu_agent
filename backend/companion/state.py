@@ -1,23 +1,30 @@
-"""会话状态机（PRD §6.1）。
+"""会话状态机（PRD §6.1 / §7.1）。
 
 阶段流转：
-    consent(知情同意) → quality(质检) → opening(开场) → main(主体 3-4 轮)
+    consent(知情同意) → quality(质检) → opening(开场) → main(主体)
         → closing(结束语) → done(出报告)
     任意阶段可因风险进入 crisis，因异常进入 aborted。
+
+收束条件（§7.1）：
+    * 累计时长 ≥ WRAP_UP_AT：当前轮回应后追加一句自然过渡，不再开启新话题；
+    * 用户静默 ≥ IDLE_CONFIRM_AT：询问「这次先聊到这里吗」；
+    * 上一步之后再静默 ≥ IDLE_END_AT - IDLE_CONFIRM_AT：进入结束话术。
+    **轮次不再作为终止条件** —— 用户愿意继续聊就继续，
+    「满 4 轮就掐断」会在用户正说得起劲时突兀收尾。
 """
 from __future__ import annotations
 
 import time
 from enum import Enum
 
-# ---------------- 时长常量（秒，PRD §6.1） ----------------
+# ---------------- 时长常量（秒，PRD §6.1 / §7.1） ----------------
 TARGET_TOTAL = 300          # 目标总时长 5 分钟
 WRAP_UP_AT = 240            # 4:00 触发收尾提醒
 HARD_LIMIT = 330            # 5:30 硬上限，强制结束
 SILENCE_PROMPT = 8          # 沉默 8s 主动确认
-SILENCE_GIVE_UP = 20        # 单轮沉默累计 20s 视为放弃
-MIN_TURNS = 3               # 主体最少轮次
-MAX_TURNS = 4               # 主体最多轮次
+IDLE_CONFIRM_AT = 60        # 静默 60s：确认是否就此结束
+IDLE_END_AT = 90            # 上一步后再等 30s 仍无回应：进入结束话术
+MIN_TURNS = 3               # 主体建议轮次（仅用于报告完整性提示，非终止条件）
 
 
 class Phase(str, Enum):
@@ -49,7 +56,10 @@ class SessionState:
         self.risk_evidence: list[str] = []
         self.resource_suggested = False
         self.wrap_up_hinted = False
-        self._last_user_ts: float | None = None
+        self.idle_stage = 0               # 静默阶梯：0=正常 1=已确认是否结束 2=已给出结束话术
+        # 静默计时基准：用户最后一次开口 / 开场白送达时刻。
+        # 用户一整轮都没开口时也要能计时，所以初值为会话创建时刻而非 None。
+        self._last_activity_ts: float = self.started_at
         self._silence_prompted = 0        # 本轮已提示过几次
 
     # ---------------- 计时 ----------------
@@ -62,20 +72,25 @@ class SessionState:
         return len(self.turns)
 
     def mark_user_input(self) -> None:
-        self._last_user_ts = time.time()
+        """用户开口：静默阶梯整体清零，确认过结束也要重新来过。"""
+        self._last_activity_ts = time.time()
         self._silence_prompted = 0
+        self.idle_stage = 0
+
+    def mark_activity(self) -> None:
+        """非用户输入的活跃点（开场白送达）。只重置计时，不清提示计数。"""
+        self._last_activity_ts = time.time()
 
     def seconds_since_user(self) -> float:
-        if self._last_user_ts is None:
-            return 0.0
-        return time.time() - self._last_user_ts
+        return time.time() - self._last_activity_ts
 
     # ---------------- 阶段推进 ----------------
     def should_wrap_up(self) -> bool:
-        """是否应进入收尾（PRD §6.1：第 4 分钟触发）。"""
-        return (self.elapsed >= WRAP_UP_AT
-                or self.turn_count >= MAX_TURNS
-                or self.elapsed >= HARD_LIMIT)
+        """是否应给模型追加收尾提示（PRD §7.1：第 4 分钟起引向收束）。
+
+        轮次**不再**参与判断：只由时长决定，避免"聊到第 4 轮就被掐断"。
+        """
+        return self.elapsed >= WRAP_UP_AT
 
     def is_hard_limit(self) -> bool:
         return self.elapsed >= HARD_LIMIT
@@ -85,9 +100,9 @@ class SessionState:
         if self.risk_level == "high":
             return Phase.CRISIS
 
-        # 轮次够了 或 时间到了 -> 收尾
+        # 时间到了 -> 收尾。轮次不再触发收尾（见 should_wrap_up 说明）。
         if self.phase in (Phase.OPENING, Phase.MAIN):
-            if self.turn_count >= MAX_TURNS or self.elapsed >= WRAP_UP_AT:
+            if self.elapsed >= WRAP_UP_AT:
                 return Phase.CLOSING
             return Phase.MAIN
         if self.phase == Phase.CLOSING:
@@ -112,6 +127,8 @@ class SessionState:
             "phase": self.phase.value,
             "elapsed": round(self.elapsed, 1),
             "turn_count": self.turn_count,
+            "idle_stage": self.idle_stage,
+            "idle_sec": round(self.seconds_since_user(), 1),
             "risk_level": self.risk_level,
             "modality": self.modality,
             "degradation_notes": self.degradation_notes,

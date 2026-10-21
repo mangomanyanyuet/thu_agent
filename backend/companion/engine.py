@@ -17,7 +17,13 @@ from .fusion import (
     fuse,
     text_emotion,
 )
-from .state import MAX_TURNS, SILENCE_PROMPT, Phase, SessionState
+from .state import (
+    IDLE_CONFIRM_AT,
+    IDLE_END_AT,
+    SILENCE_PROMPT,
+    Phase,
+    SessionState,
+)
 
 # ------------------------------------------------------------------ 话术（PRD §6.2）
 ROLE = """你是「小伴」，一款 AI 情绪陪伴助手。
@@ -51,6 +57,10 @@ OPENING = ("嗨，很高兴今天能和你聊聊。接下来的几分钟，我�
 
 SILENCE_PROMPT_TEXT = "不着急，你可以慢慢说。"
 
+# 静默 IDLE_CONFIRM_AT(60s) 后的确认话术；再过 IDLE_END_AT-IDLE_CONFIRM_AT(30s)
+# 仍无回应，才说 CLOSING。收尾不该由轮数决定，该由"用户还想不想聊"决定。
+IDLE_CONFIRM_TEXT = "看到你很久没回复了，这次先聊到这里吗"
+
 WRAP_UP_HINT = "（本轮回应后，用一句话自然地把对话引向收尾，不要再开启新话题）"
 
 CLOSING = ("谢谢你今天的分享，希望接下来的时间你能对自己好一点。"
@@ -71,6 +81,10 @@ MAIN_QUESTION_GUIDE = {
     3: "问一个更轻的、面向当下的或支持性的问题（如：最近有什么让你稍微松口气的事吗）。",
     4: "收束：邀请用户说一句此刻最想对自己说的话，或最希望被理解的一点。",
 }
+
+# 第 5 轮及以后（只在用户确实还想聊、且未到 4:00 收尾提醒时才会出现）
+CONTINUE_GUIDE = ("继续围绕用户此刻的感受倾听并回应，不要开启与情绪无关的新话题，"
+                  "也不要替用户宣布结束。")
 
 SELF_CARE_TIPS = {
     "平静": ["看起来你今天状态比较稳，可以把这种节奏记下来，下次心乱时作为参照。"],
@@ -257,7 +271,8 @@ class CompanionEngine:
         # 关闭时退回关键词匹配（延迟优先场景）
         system = ROLE + (OUTPUT_SPEC if get_settings().companion_llm_emotion else "")
 
-        guide = MAIN_QUESTION_GUIDE.get(min(turn_id, MAX_TURNS), "")
+        # 轮次没有上限，超出引导表的部分用通用目标，避免第 5 轮起误发"收束"指令
+        guide = MAIN_QUESTION_GUIDE.get(turn_id) or CONTINUE_GUIDE
         system += f"\n\n【本轮目标】{guide}"
 
         # 把感知到的情绪作为"倾听线索"给模型，但明确要求它**不要**复述或播报
@@ -302,10 +317,12 @@ class CompanionEngine:
         return (reply or self._fallback_reply(turn_id)), emotion
 
     def _fallback_reply(self, turn_id: int) -> str:
-        return ["嗯，我在听。能再多说一点吗？",
+        # 原来第 4 条兜底是"今天先聊到这里也挺好的" —— 那是用兜底话替用户宣布结束。
+        # 轮次既然已不是终止条件，兜底就只能负责"把话接住"，不能负责收尾。
+        base = ["嗯，我在听。能再多说一点吗？",
                 "听起来这件事对你影响不小。",
-                "谢谢你愿意告诉我这些。",
-                "今天先聊到这里也挺好的，谢谢你。"][min(turn_id - 1, 3)]
+                "谢谢你愿意告诉我这些。"]
+        return base[min(turn_id - 1, len(base) - 1)]
 
     def _incongruent(self, fused: dict) -> bool:
         if not self.s.turns:
@@ -319,12 +336,19 @@ class CompanionEngine:
         neg_face = fl in ("低落", "焦虑", "疲惫", "烦躁", "紧张")
         return pos and neg_face
 
-    def _closing(self, prev_reply: str) -> str:
-        text = f"{prev_reply}\n\n{CLOSING}"
+    def _closing_tail(self) -> str:
+        """结束语正文（不含上一轮的回应）。
+
+        抽出来是为了让"静默超时收尾"和"正常收尾"共用同一套文案与资源转介逻辑。
+        """
+        text = CLOSING
         if self.s.risk_level == "watch":
             text += f"\n\n{WATCH_ADDENDUM}"
             self.s.resource_suggested = True
         return text
+
+    def _closing(self, prev_reply: str) -> str:
+        return f"{prev_reply}\n\n{self._closing_tail()}"
 
     def _crisis_resp(self) -> dict:
         return {
@@ -424,17 +448,64 @@ class CompanionEngine:
             return "none", [], _pack()
         return ("high" if max(levels) >= 2 else "watch"), evidence, _pack()
 
-    # ---------------------------------------------------------------- 沉默
-    def silence_check(self) -> str | None:
-        """PRD §6.1：沉默 > 8s 主动确认。"""
+    # ---------------------------------------------------------------- 静默
+    def silence_check(self) -> dict:
+        """静默阶梯（PRD §7.1）：由"用户还回不回复"决定收尾，而不是由轮次决定。
+
+        | 静默时长 | action  | 话术                             |
+        |----------|---------|----------------------------------|
+        | ≥ 8s     | nudge   | 不着急，你可以慢慢说。            |
+        | ≥ 60s    | confirm | 看到你很久没回复了，这次先聊到这里吗 |
+        | ≥ 90s    | end     | CLOSING（+ watch 时的资源转介）    |
+
+        返回 {"prompt": str|None, "action": none|nudge|confirm|end,
+              "idle_sec": float, "phase": str}。
+
+        每次调用最多推进一步；用户一开口 mark_user_input() 会把阶梯清零，
+        所以"确认之后又聊起来了"不会在 30s 后被强行结束。
+        调用方（前端轮询）必须能拿到 action == "end" 并据此收尾。
+        """
         s = self.s
         gap = s.seconds_since_user()
-        if s._last_user_ts is None or gap < SILENCE_PROMPT:
-            return None
-        if s._silence_prompted == 0:
+        out = {"prompt": None, "action": "none",
+               "idle_sec": round(gap, 1), "phase": s.phase.value}
+
+        # 已经收尾/危机/退出的会话不再推进静默阶梯
+        if s.phase in (Phase.CLOSING, Phase.DONE, Phase.CRISIS, Phase.ABORTED):
+            return out
+
+        if s.idle_stage >= 1 and gap >= IDLE_END_AT:
+            s.idle_stage = 2
+            out["action"] = "end"
+            out["prompt"] = self.close_for_idle()
+            out["phase"] = s.phase.value
+            return out
+
+        if s.idle_stage == 0 and gap >= IDLE_CONFIRM_AT:
+            s.idle_stage = 1
+            out["action"] = "confirm"
+            out["prompt"] = IDLE_CONFIRM_TEXT
+            return out
+
+        if s._silence_prompted == 0 and gap >= SILENCE_PROMPT:
             s._silence_prompted = 1
-            return SILENCE_PROMPT_TEXT
-        return None
+            out["action"] = "nudge"
+            out["prompt"] = SILENCE_PROMPT_TEXT
+            return out
+        return out
+
+    def close_for_idle(self) -> str:
+        """静默超时后的收尾：相位进 closing，返回结束话术。"""
+        import tracer
+
+        s = self.s
+        prev = s.phase.value
+        s.phase = Phase.CLOSING
+        text = self._closing_tail()
+        s.history.append({"role": "assistant", "content": text})
+        tracer.phase(s.session_id, prev, s.phase.value,
+                     reason=f"静默 {round(s.seconds_since_user())}s 无回复")
+        return text
 
     # ---------------------------------------------------------------- 报告
     def build_report(self) -> dict:

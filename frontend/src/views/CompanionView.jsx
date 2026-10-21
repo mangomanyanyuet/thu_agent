@@ -42,6 +42,12 @@ export default function CompanionView({ userId, refresh, onRisk }) {
   const samplerRef = useRef(null)
   const rafRef = useRef(null)
   const timerRef = useRef(null)
+  // 静默轮询要在定时器里读最新状态，但不能把 busy/finish 放进依赖
+  // （它们每次渲染都变，会让 interval 每秒重建、永远走不到 3s）
+  const busyRef = useRef(false)
+  const endedRef = useRef(false)
+  const finishRef = useRef(null)
+  busyRef.current = busy
 
   // ---------------- 摄像头 ----------------
   const startCamera = useCallback(async () => {
@@ -228,6 +234,39 @@ export default function CompanionView({ userId, refresh, onRisk }) {
       setErr(String(e.message || e))
     }
   }
+  finishRef.current = finish
+
+  // ---------------- 静默收尾（PRD §7.1） ----------------
+  // 收尾不再由"满 4 轮"触发：轮询后端静默阶梯，
+  // 60s 未回复先确认一次，再过 30s 仍无回复才由后端给出结束话术。
+  useEffect(() => {
+    if (step !== 'talking' || !sid) return
+    endedRef.current = false
+    const tick = async () => {
+      if (busyRef.current || endedRef.current) return
+      let r
+      try {
+        r = await api.companionSilence(sid)
+      } catch {
+        return // 一次探活失败不该打断正在进行的对话
+      }
+      if (!r || !r.prompt) return
+      if (r.action === 'end') {
+        endedRef.current = true
+        setMsgs((m) => [...m, { role: 'assistant', content: r.prompt }])
+        await finishRef.current?.()
+        return
+      }
+      // 同一句提示只插一次，否则轮询会把它刷成一串
+      setMsgs((m) =>
+        m.some((x) => x.content === r.prompt)
+          ? m
+          : [...m, { role: 'assistant', content: r.prompt, isNudge: true }]
+      )
+    }
+    const id = setInterval(tick, 3000)
+    return () => clearInterval(id)
+  }, [step, sid])
 
   const onVoiceResult = useCallback((r) => {
     setVoice(r)
@@ -345,7 +384,7 @@ export default function CompanionView({ userId, refresh, onRisk }) {
             <div className="cmp-head">
               <span className="badge subtle">{PHASE_LABEL[phase] || phase}</span>
               <span className="muted small">{fmt(elapsed)} / 5:00</span>
-              <span className="muted small">第 {Math.min(turnCount + 1, 4)} / 4 轮</span>
+              <span className="muted small">第 {turnCount + 1} 轮</span>
               <button className="btn tiny ghost" onClick={finish}>结束并查看小结</button>
             </div>
 
@@ -356,6 +395,7 @@ export default function CompanionView({ userId, refresh, onRisk }) {
                   {m.voice && (
                     <div className="msg-meta small">🎙 {m.voice.tone || '语音'}</div>
                   )}
+                  {m.isNudge && <div className="msg-meta small">静默提示</div>}
                 </div>
               ))}
               {busy && <div className="msg assistant"><div className="bubble">…</div></div>}

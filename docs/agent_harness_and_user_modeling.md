@@ -271,8 +271,8 @@ r_t        &= V(s_t, a_t, o'_{t+1})                && \text{评估信号}
 | PRD 条目 | 业务需求 | 技术挑战 | 对框架/系统的要求 | 实现位置 |
 |---|---|---|---|---|
 | §6.1 | 5 分钟时长控制，4:00 收尾提醒、5:30 硬上限 | 实时计时 + 相位跃迁，不硬掐断 | **时间感知状态机**：计时器状态在 State 内，条件边按 `elapsed` 跃迁 | `engine.py: next_phase()` |
-| §6.1 | 沉默 >8s 主动确认，>20s 换轻问题 | 计时器 + 可打断当前节点 | 事件驱动/定时器注入，`silence_check()` 独立于主循环轮询 | `engine.py: silence_check()` |
-| §6.2 | 3-4 轮开放式提问，追问 ≤2 层 | 轮次计数 + 追问深度跟踪 | State 内 `turn_count` / `followup_depth`，条件边限制 | `state.py: MAX_TURNS` |
+| §7.1 | 静默阶梯 8s 轻提示 / 60s 确认是否结束 / 90s 收尾 | 计时器 + 可打断当前节点 | 事件驱动/定时器注入，`silence_check()` 独立于主循环轮询；`idle_stage` 记录推到第几级 | `engine.py: silence_check()` |
+| §6.2 | 开放式提问，追问 ≤2 层 | 轮次计数 + 追问深度跟踪 | State 内 `turn_count` / `followup_depth`；轮次**只做引导不做终止** | `engine.py: MAIN_QUESTION_GUIDE` |
 | §6.2 | 先共情后提问（Reflect→Ask） | 生成质量控制 | prompt 约束 + 输出清洗（防思考过程泄漏） | `llm.sanitize_reply()` |
 | §6.3.1 | ASR 转写 + 文本语义情绪 | 实时/准实时、格式兼容（小程序 mp3） | 感知层外置，**不进 LLM 上下文** | `asr.py` |
 | §6.3.1 | 副语言声学特征（语速/基频/停顿/能量） | 零依赖特征提取 | 感知层 → 结构化 `AudioFeatures` | `asr.extract_features()` |
@@ -629,17 +629,20 @@ def decide_next_action(state, user_state, budget):
     if state.risk_level == 'high':
         return CRISIS_PROTOCOL
 
-    # ② 时间/轮次硬边界（PRD §7.1）
-    if state.elapsed >= HARD_LIMIT or state.turn_count >= MAX_TURNS:
+    # ② 时间/静默硬边界（PRD §7.1）—— 轮次不再是终止条件
+    if state.elapsed >= HARD_LIMIT:
         return CLOSING
+
+    if state.idle_sec >= IDLE_END_AT and state.idle_stage >= 1:
+        return CLOSING                        # 静默 90s：确认过仍无回复
 
     if state.elapsed >= WRAP_UP_AT:          # 4:00 收尾提醒
         return wrap_up_transition()
 
-    # ③ 沉默处理（PRD §7.1）
+    # ③ 静默阶梯（PRD §7.1）
     gap = state.seconds_since_user()
-    if gap > 20: return lighter_question() or CLOSING
-    if gap > 8:  return SILENCE_PROMPT
+    if gap >= IDLE_CONFIRM_AT: return IDLE_CONFIRM   # 60s：「这次先聊到这里吗」
+    if gap >= 8:               return SILENCE_PROMPT # 8s：「不着急，你可以慢慢说」
 
     # ④ 主动提问决策
     candidates = generate_questions(state, user_state)

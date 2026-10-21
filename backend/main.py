@@ -599,12 +599,18 @@ def companion_turn(session_id: str, req: CompanionTurn):
 
 @app.get(f"{settings.api_prefix}/companion/{{session_id}}/silence")
 def companion_silence(session_id: str):
-    """PRD §6.1 沉默检测：>8s 返回一句主动确认话术。"""
+    """PRD §7.1 静默阶梯：8s 轻提示 / 60s 确认是否结束 / 90s 收尾。
+
+    返回 {prompt, action(none|nudge|confirm|end), idle_sec, phase, elapsed}。
+    前端需轮询本接口：action == "end" 时展示结束话术并调用 /finish。
+    """
     import companion.service as cs
     eng = cs.engine_of(session_id)
     if not eng:
         raise HTTPException(404, "会话不存在")
-    return {"prompt": eng.silence_check(), "elapsed": round(eng.s.elapsed, 1)}
+    out = eng.silence_check()
+    out["elapsed"] = round(eng.s.elapsed, 1)
+    return out
 
 
 @app.get(f"{settings.api_prefix}/companion/{{session_id}}/report")

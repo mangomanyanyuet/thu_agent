@@ -65,6 +65,9 @@ def set_quality(sid: str, quality: dict) -> SessionState:
                 reason=f"质检完成（人脸={quality.get('face_visible')}，"
                        f"低光={quality.get('low_light')}，多人={quality.get('multi_person')}）")
     st.phase = Phase.OPENING
+    # 开场白随本次响应一起送达用户，静默计时从这里起算：
+    # 否则用户从头到尾一句话都没说时，seconds_since_user() 会一直停在会话创建时刻。
+    st.mark_activity()
     return st
 
 

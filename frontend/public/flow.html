@@ -157,7 +157,7 @@ const PANES = [
   {
     id:'phase', tab:'③ 陪伴会话状态机',
     title:'陪伴会话：Phase 状态机（PRD v1.0 的 5 分钟流程）',
-    desc:'7 个相位。任意时刻 <code>risk_level == high</code> 会直接跳到 crisis；轮次满 4 或时间到 240s 进入收尾。',
+    desc:'7 个相位。任意时刻 <code>risk_level == high</code> 会直接跳到 crisis；收尾由<b>静默阶梯</b>（60s 确认 / 90s 结束）或时间到 240s 触发，<b>不再由轮次触发</b>。',
     code:`stateDiagram-v2
     direction LR
     [*] --> consent : 创建会话
@@ -165,8 +165,8 @@ const PANES = [
     consent --> aborted : 未同意 / 退出
     quality --> opening : 质检通过
     opening --> main : 用户首轮
-    main --> main : turn < 4 且 elapsed < 240s
-    main --> closing : turn >= 4 或 elapsed >= 240s
+    main --> main : 用户仍在回复 且 elapsed < 240s
+    main --> closing : elapsed >= 240s 或 静默 >= 90s
     closing --> done : 输出结束语
     done --> [*] : 生成三层报告
     opening --> crisis : risk = high
@@ -178,9 +178,11 @@ const PANES = [
     <tr><td><code>TARGET_TOTAL</code></td><td>300s</td><td>目标总时长 5 分钟</td></tr>
     <tr><td><code>WRAP_UP_AT</code></td><td>240s</td><td>4:00 触发收尾提醒（追加过渡句，不硬掐断）</td></tr>
     <tr><td><code>HARD_LIMIT</code></td><td>330s</td><td>5:30 硬上限，强制结束</td></tr>
-    <tr><td><code>MAX_TURNS</code></td><td>4</td><td>主体最多轮次</td></tr>
-    <tr><td><code>SILENCE_PROMPT</code></td><td>8s</td><td>沉默 8s 主动确认</td></tr>
-    <tr><td><code>SILENCE_GIVE_UP</code></td><td>20s</td><td>累计 20s 视为放弃该轮</td></tr></table>
+    <tr><td><code>SILENCE_PROMPT</code></td><td>8s</td><td>静默 8s 轻声确认「不着急，你可以慢慢说」</td></tr>
+    <tr><td><code>IDLE_CONFIRM_AT</code></td><td>60s</td><td>静默 60s 确认「看到你很久没回复了，这次先聊到这里吗」</td></tr>
+    <tr><td><code>IDLE_END_AT</code></td><td>90s</td><td>上一步后再等 30s 仍无回复 → 结束话术（<code>action=end</code>）</td></tr>
+    <tr><td><code>MIN_TURNS</code></td><td>3</td><td>主体建议轮次（报告完整性提示，<b>非终止条件</b>）</td></tr></table>
+    <div class="note">已废弃 <code>MAX_TURNS</code>：轮次与用户是否想结束无关，<code>main → closing</code> 只由累计时长或静默阶梯触发。用户一开口，静默阶梯（<code>idle_stage</code>）即清零。</div>
     <div class="note">沉默时间<b>不计入"对话时长"</b>（否则用户思考会被扣时间），但计入总墙钟时间。</div>`
   },
   {

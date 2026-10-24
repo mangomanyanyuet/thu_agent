@@ -106,6 +106,12 @@ export const api = {
     req(`/companion/${sid}/finish`, { method: 'POST' }),
   companionAbort: (sid) =>
     req(`/companion/${sid}/abort`, { method: 'POST' }),
+  // ---- 病人模拟（测试用，受后端 ENABLE_PATIENT_SIM 控制）----
+  simProfiles: () => req('/sim/profiles'),
+  simTurn: (payload) =>
+    req('/sim/turn', { method: 'POST', body: JSON.stringify(payload) }),
+  simRun: (payload) =>
+    req('/sim/run', { method: 'POST', body: JSON.stringify(payload) }),
   createSession: (userId) =>
     req(`/sessions?user_id=${encodeURIComponent(userId)}`, { method: 'POST' }),
   listSessions: (userId) => req(`/sessions/${encodeURIComponent(userId)}`),

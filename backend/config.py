@@ -81,6 +81,13 @@ class Settings(BaseSettings):
     demo_password: str = os.getenv("DEMO_PASSWORD", "demo1234")
     demo_display_name: str = os.getenv("DEMO_DISPLAY_NAME", "演示用户")
 
+    # ---- 病人模拟（测试用开关）----
+    # 打开后 /api/sim/* 可用；关掉则直接 403，避免演示/生产环境被误当真实用户数据。
+    # ⚠ 即便打开，也必须**显式传 style/severity** 才会启用病人 Agent ——
+    #   普通 /api/chat 走的一直是真人输入，不会受影响。
+    enable_patient_sim: bool = os.getenv(
+        "ENABLE_PATIENT_SIM", "1").lower() in ("1", "true", "yes")
+
     # ---- 陪伴会话的文本情绪判定方式 ----
     # 1（默认）：在生成回复的同一次 LLM 调用里，让模型额外输出一段机器可读的
     #   情绪判定（不展示给用户）。不增加调用次数，但 prompt + 输出变长，

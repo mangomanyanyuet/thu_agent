@@ -23,19 +23,35 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
   const [err, setErr] = useState('')
   const listRef = useRef(null)
 
+  // 病人模拟（测试用可选项）。sim === null 表示后端未开启，面板不显示。
+  const [sim, setSim] = useState(null)
+  const [simCfg, setSimCfg] = useState({
+    style: 'guarded', severity: 5, turns: 6, auto_review: 'approve',
+  })
+  const [simBusy, setSimBusy] = useState(false)
+  const [simOut, setSimOut] = useState(null)
+
+  const loadMessages = useCallback(async (sid) => {
+    if (!sid) return
+    const rows = await api.messages(sid)
+    setMessages(
+      rows.map((r) => ({
+        role: r.role,
+        content: r.content,
+        emotion: r.emotion,
+        risk_level: r.risk_level,
+      }))
+    )
+  }, [])
+
   useEffect(() => {
-    if (!sessionId) return
-    api.messages(sessionId).then((rows) => {
-      setMessages(
-        rows.map((r) => ({
-          role: r.role,
-          content: r.content,
-          emotion: r.emotion,
-          risk_level: r.risk_level,
-        }))
-      )
-    })
-  }, [sessionId])
+    loadMessages(sessionId)
+  }, [sessionId, loadMessages])
+
+  useEffect(() => {
+    // 403 说明后端关掉了病人模拟 —— 这是**可选项**，不开启就不该出现在界面上
+    api.simProfiles().then(setSim).catch(() => setSim(null))
+  }, [])
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
@@ -91,6 +107,42 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
       ])
     } finally {
       setBusy(false)
+    }
+  }
+
+  // ---------------- 病人模拟：让 Agent 扮演来访者自动接话 ----------------
+  const runSim = async (oneTurn) => {
+    const sid = await ensureSession()
+    setSimBusy(true)
+    setErr('')
+    setSimOut(null)
+    setPending(null)
+    setLive(null)
+    try {
+      const payload = {
+        user_id: userId,
+        session_id: sid,
+        style: simCfg.style,
+        severity: Number(simCfg.severity),
+        turns: Number(simCfg.turns) || 6,
+        auto_review: simCfg.auto_review,
+      }
+      const out = oneTurn ? await api.simTurn(payload) : await api.simRun(payload)
+      const last = oneTurn
+        ? out
+        : (out.transcript || [])[out.transcript.length - 1]
+      if (last) {
+        setLive(last)
+        onRisk?.(last.risk_level || '')
+        if (last.interrupted && last.pending_review) setPending(last.pending_review)
+      }
+      if (!oneTurn) setSimOut(out)
+      await loadMessages(sid)
+      refresh?.()
+    } catch (e) {
+      setErr(String(e.message || e))
+    } finally {
+      setSimBusy(false)
     }
   }
 
@@ -305,6 +357,74 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
                 拒绝
               </button>
             </div>
+          </div>
+        )}
+
+        {sim && (
+          <div className="card sim">
+            <h3>🧪 病人模拟（测试）</h3>
+            <p className="muted small">
+              让 Agent 扮演来访者自动接话，用来验证风险逐级升级与人工审核中断。
+              产出会写进当前会话，请勿与真实用户数据混用。
+            </p>
+            <div className="kv">
+              <span>风格</span>
+              <select value={simCfg.style} disabled={simBusy}
+                onChange={(e) => setSimCfg({ ...simCfg, style: e.target.value })}>
+                {sim.styles.map((s) => (
+                  <option key={s.key} value={s.key}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <div className="kv">
+              <span>严重程度</span>
+              <select value={simCfg.severity} disabled={simBusy}
+                onChange={(e) => setSimCfg({ ...simCfg, severity: e.target.value })}>
+                {sim.severities.map((s) => (
+                  <option key={s.level} value={s.level}>
+                    {s.level} {s.name}（{s.target}）
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="kv">
+              <span>轮数</span>
+              <input type="number" min="1" max="20" value={simCfg.turns} disabled={simBusy}
+                onChange={(e) => setSimCfg({ ...simCfg, turns: e.target.value })} />
+            </div>
+            <div className="kv">
+              <span>挂起后</span>
+              <select value={simCfg.auto_review} disabled={simBusy}
+                onChange={(e) => setSimCfg({ ...simCfg, auto_review: e.target.value })}>
+                <option value="approve">自动放行</option>
+                <option value="none">停在挂起点（看中断）</option>
+                <option value="override">改写并放行</option>
+                <option value="reject">拒绝</option>
+              </select>
+            </div>
+            <div className="row">
+              <button className="btn primary" disabled={simBusy} onClick={() => runSim(true)}>
+                {simBusy ? '对练中…' : '跑一轮'}
+              </button>
+              <button className="btn" disabled={simBusy} onClick={() => runSim(false)}>
+                跑 {simCfg.turns} 轮
+              </button>
+            </div>
+            {simOut && (
+              <div className="sim-out small">
+                <div>风险轨迹：{(simOut.risk_track || []).join(' → ') || '—'}</div>
+                <div>
+                  危机分支：{simOut.crisis_at_turn ? `第 ${simOut.crisis_at_turn} 轮` : '未触发'}
+                </div>
+                <div>
+                  人工审核中断：
+                  {simOut.interrupted_at_turn ? `第 ${simOut.interrupted_at_turn} 轮` : '未触发'}
+                </div>
+                <div className="muted">
+                  seed {simOut.profile?.seed} · {simOut.profile?.persona}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -181,13 +181,21 @@ body {
 .result { margin-top: 12px; padding: 12px; background: #f8f9fc; border-radius: 9px; font-size: 13px; }
 .result pre { margin: 8px 0 0; font-size: 11px; max-height: 220px; overflow: auto; }
 
-textarea, input[type='text'], input:not([type]), select {
+textarea, input[type='text'], input:not([type]), input[type='number'], select {
   border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px;
   font-family: inherit; font-size: 13px; color: var(--text); background: #fff;
 }
 textarea { width: 100%; min-height: 84px; resize: vertical; }
 select { cursor: pointer; }
 .row input { flex: 1; min-width: 160px; }
+.kv select, .kv input[type='number'] { max-width: 190px; padding: 5px 8px; }
+
+/* ---------- 病人模拟（测试用） ---------- */
+.card.sim { border: 1px dashed var(--line); }
+.sim-out {
+  margin-top: 10px; padding: 9px 10px; background: #f8f9fc; border-radius: 8px;
+  font-size: 12px; line-height: 1.9;
+}
 
 /* ---------- profile ---------- */
 .profile {

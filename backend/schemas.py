@@ -65,6 +65,33 @@ class CompanionTurn(BaseModel):
     face: FaceFeatures | None = None
 
 
+class PatientProfile(BaseModel):
+    """病人模拟 Agent 的角色设定（仅测试用，见 patient_agent.py）。"""
+
+    style: str = "guarded"                       # 表达风格
+    severity: int = Field(default=3, ge=1, le=5)  # 严重程度 1~5
+
+
+class SimTurnRequest(PatientProfile):
+    """跑**一轮**模拟对话：病人 Agent 出话 -> 陪伴 Agent 回复。"""
+
+    user_id: str
+    session_id: str | None = None
+    # 给了就直接用这句，不再生成 —— 便于复现某一句特定的话
+    patient_text: str | None = None
+    # 被 human_review 挂起时如何自动处理；none = 停在挂起点
+    auto_review: str = Field(default="approve",
+                             pattern="^(approve|override|reject|none)$")
+    seed: int | None = None
+    turns: int = Field(default=6, ge=1, le=20)   # 总轮数，用于披露曲线
+
+
+class SimRunRequest(SimTurnRequest):
+    """连续跑多轮，返回完整对练记录。"""
+
+    stop_on_crisis: bool = False
+
+
 class ReviewRequest(BaseModel):
     session_id: str
     action: str = Field(default="approve", pattern="^(approve|override|reject)$")

@@ -79,6 +79,8 @@ backend/
   llm.py            LLM 适配层：structured/stream，模型不可用时降级
   memory.py         画像渲染、事实合并、量表趋势、每日记录沉淀
   perception.py     量表计分 + 多模态特征 + 规则风险引擎
+  patient_agent.py  「病人」模拟 Agent：风格×严重程度 + 随机对练 + 方法类红线
+  simulate.py       病人模拟 CLI 脚本（/api/sim/* 复用同一套逻辑）
   companion/        视频语音陪伴会话（PRD 链路）
   mini.py           小程序适配层（同步接口 + 会话自愈 + 首屏聚合）
   auth.py           账号与 token（演示级）
@@ -126,6 +128,7 @@ tail -f data/traces/agent-$(date +%Y%m%d).jsonl | jq -r .msg   # 实时决策日
 | `FACT_EXTRACT_EVERY` | `3` | 每 N 轮做一次事实抽取（首轮必抽） |
 | `COMPANION_LLM_EMOTION` | `1` | 陪伴会话用 LLM 判情绪；`0` 退回关键词（快但漏判多） |
 | `TRACE_ENABLED` | `1` | 结构化事件日志，供「决策轨迹」页实时展示 |
+| `ENABLE_PATIENT_SIM` | `1` | 病人模拟开关；关闭后 `/api/sim/*` 返回 403 |
 
 ---
 
@@ -161,6 +164,7 @@ tail -f data/traces/agent-$(date +%Y%m%d).jsonl | jq -r .msg   # 实时决策日
 4. **人工审核台**点「放行 / 改写」→ 走完 HITL 闭环
 5. **量表页**把 PHQ-9 第 9 题选到 2 或 3 → 量表通道直接触发风险
 6. **决策轨迹**页 → 实时看每轮的通道判定、上下文装配、图转移
+7. **对话页侧栏「病人模拟」**选风格 + 严重程度 → 自动跑完升级与挂起（或用 `simulate.py` 脚本）
 
 ---
 
@@ -178,6 +182,47 @@ tail -f data/traces/agent-$(date +%Y%m%d).jsonl | jq -r .msg   # 实时决策日
 | GET | `/api/overview/{user_id}` | 用户全景（画像+趋势+风险+记录） |
 | GET/POST | `/api/review/pending` \| `/api/review` | 待审队列 / 人工审核 |
 | POST | `/api/asr` | 语音转写 + 声学特征 + 语气 |
+| GET | `/api/sim/profiles` | 病人模拟：可选风格与严重程度 |
+| POST | `/api/sim/turn` \| `/api/sim/run` | 病人模拟：跑一轮 / 连续跑多轮（需 `ENABLE_PATIENT_SIM=1`） |
+
+---
+
+## 病人模拟（测试用可选项）
+
+让对话的另一侧也由 Agent 驱动，用于验证**风险逐级升级 → 危机分支 → human_review 挂起**这条链路，
+不必靠人反复手打「不想活了」这类句子。
+
+```bash
+cd backend
+python3 simulate.py --list                                   # 看可选风格与严重程度
+python3 simulate.py --style guarded --severity 5 --turns 8    # 自动对练 8 轮
+python3 simulate.py --style hostile --severity 4 --seed 42 --json out.json
+```
+
+| 维度 | 取值 | 作用 |
+|---|---|---|
+| 风格 `--style` | `guarded` 掩饰 / `avoidant` 回避 / `verbose` 倾诉 / `ruminative` 反刍 / `somatic` 躯体化 / `hostile` 抵触 | 决定**怎么说话** |
+| 严重程度 `--severity` | 1 轻微 / 2 轻度 / 3 中度 / 4 重度 / 5 危急 | 决定**内心有多糟**，即可透露到哪一步 |
+
+两者正交：同一个严重程度可以是掩饰型也可以是倾诉型。
+
+设计要点：
+
+- **随机性注入 prompt，而不是靠 temperature**。`llm.complete()` 没暴露 temperature，
+  所以每轮重新抽样「情境 / 此刻感受 / 配合度 / 叙事节拍」并写进 prompt；
+  同一 `--seed` 可完整复现，换 seed 就是另一段对练。
+- **披露曲线单调递增**。前几轮压着不说、中段才松动，才能测到「升级」告警；
+  一上来就满级只能测到终态。允许回落会让风险等级来回跳，既不像真人也没法测。
+- **病人侧的红线是"不得产出具体方法"**，与陪伴侧"不得漏报"相反，两份 prompt 独立维护。
+  「写好遗书 / 把东西送人 / 以后不用管我了」属意念与准备行为，允许；
+  「吃了多少片 / 在天台 / 割腕」属具体方法，命中即替换。
+  因此**最高只模拟到 high，不模拟 imminent** —— 后者必然要描述手段在手或正在实施。
+- **mock 模式下走内置台词**：`MockLLM.complete()` 返回的是**陪伴者**的 CBT 台词，
+  直接拿来当病人说话会完全跑偏，故检测到 mock 时改用 `SCRIPTED_LINES`。
+
+⚠ 模拟数据会**真实写入数据库**（会话 / 消息 / 风险事件 / 画像），默认挂在 `u_sim` 下，
+会话 summary 带 `[SIM]` 标记便于清理。开关为 `ENABLE_PATIENT_SIM`（默认 1，关闭后 `/api/sim/*` 返回 403）；
+即便开启，普通 `/api/chat` 走的仍是真人输入，不受影响。
 
 ---
 

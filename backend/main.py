@@ -25,6 +25,8 @@ from schemas import (  # noqa: E402
     ProfileUpdate,
     ReviewRequest,
     ScaleSubmitRequest,
+    SimRunRequest,
+    SimTurnRequest,
 )
 
 settings = get_settings()
@@ -263,6 +265,80 @@ def chat_stream(req: ChatRequest):
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache",
                                       "X-Accel-Buffering": "no"})
+
+
+# ================================================================== 病人模拟（测试用）
+def _sim_enabled() -> None:
+    """可选项的总开关。关掉后 /api/sim/* 一律 403。
+
+    模拟数据会写进会话/消息/风险事件/画像，演示与生产环境不该开放。
+    """
+    if not get_settings().enable_patient_sim:
+        raise HTTPException(403, "病人模拟未开启（ENABLE_PATIENT_SIM=0）")
+
+
+@app.get(f"{settings.api_prefix}/sim/profiles")
+def sim_profiles():
+    """可选的风格 / 严重程度清单，供前端下拉框使用。"""
+    _sim_enabled()
+    from patient_agent import list_profiles
+    return {"enabled": True, **list_profiles()}
+
+
+@app.post(f"{settings.api_prefix}/sim/turn")
+def sim_turn(req: SimTurnRequest):
+    """跑**一轮**模拟对话：病人 Agent 出话 -> 陪伴 Agent 回复。
+
+    与 /api/chat 完全隔离：不传 style/severity 的普通对话永远走真人输入。
+    """
+    _sim_enabled()
+    import graph
+    import simulate
+    from patient_agent import STYLES, SEVERITIES
+
+    if req.style not in STYLES:
+        raise HTTPException(400, f"未知风格：{req.style}")
+    if req.severity not in SEVERITIES:
+        raise HTTPException(400, "严重程度须为 1~5")
+
+    sid = req.session_id or graph.new_session(req.user_id)
+    import storage
+    if not storage.get_session(sid):
+        raise HTTPException(404, "session 不存在")
+
+    # 按会话复用：否则每点一次「跑一轮」披露曲线都从第 1 级重开
+    patient = simulate.patient_of(sid, req.style, req.severity, req.seed, req.turns)
+    rec = simulate.run_one_turn(req.user_id, sid, patient,
+                                doctor_reply=simulate.last_assistant_text(sid),
+                                patient_text=req.patient_text,
+                                auto_review=req.auto_review)
+    return {"session_id": sid, "profile": patient.describe(), **rec}
+
+
+@app.post(f"{settings.api_prefix}/sim/run")
+def sim_run(req: SimRunRequest):
+    """连续跑多轮，返回完整对练记录（含风险轨迹与首次挂起的轮次）。
+
+    同步执行，轮数较多时会比较久；前端请限制 turns 并给出等待提示。
+    """
+    _sim_enabled()
+    import simulate
+    from patient_agent import STYLES, SEVERITIES
+
+    if req.style not in STYLES:
+        raise HTTPException(400, f"未知风格：{req.style}")
+    if req.severity not in SEVERITIES:
+        raise HTTPException(400, "严重程度须为 1~5")
+
+    try:
+        out = simulate.run_session(
+            req.user_id, req.style, req.severity, req.turns,
+            seed=req.seed, auto_review=req.auto_review,
+            stop_on_crisis=req.stop_on_crisis, session_id=req.session_id,
+        )
+    except KeyError:
+        raise HTTPException(404, "session 不存在") from None
+    return out
 
 
 @app.get(f"{settings.api_prefix}/asr/status")

@@ -56,3 +56,6 @@ Thumbs.db
 .env
 .env.local
 nohup.out
+*.tgz
+
+inference/*

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="470" viewBox="0 0 1040 470">
+<defs><marker id="ar" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#666"/></marker><marker id="arr" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#b03a3a"/></marker><marker id="ag" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0,0 L10,4 L0,8 z" fill="#2f8a55"/></marker></defs>
+<style>text{font-family:Hiragino Sans GB, STHeiti Medium, STHeiti, PingFang SC, Arial Unicode MS, sans-serif}</style>
+<rect width="1040" height="470" fill="#ffffff"/>
+<text x="28" y="34" font-size="20" font-weight="700" fill="#111">图 4 · V4（cmp_52527311）逐轮「对话内容线索 → 相位」对应关系</text>
+<rect x="95.0" y="90" width="150" height="300" rx="8" fill="#e8f1fd" stroke="#3a6ea5" stroke-width="1.2" opacity="0.55"/>
+<text x="170.0" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#3a6ea5">main</text>
+<rect x="265.0" y="90" width="150" height="300" rx="8" fill="#e8f1fd" stroke="#3a6ea5" stroke-width="1.2" opacity="0.55"/>
+<text x="340.0" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#3a6ea5">main</text>
+<rect x="435.0" y="90" width="150" height="300" rx="8" fill="#e8f1fd" stroke="#3a6ea5" stroke-width="1.2" opacity="0.55"/>
+<text x="510.0" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#3a6ea5">main</text>
+<rect x="605.0" y="90" width="150" height="300" rx="8" fill="#fdf6e3" stroke="#b58900" stroke-width="1.2" opacity="0.55"/>
+<text x="680.0" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#b58900">closing</text>
+<rect x="775.0" y="90" width="150" height="300" rx="8" fill="#e6f6ec" stroke="#2f8a55" stroke-width="1.2" opacity="0.55"/>
+<text x="850.0" y="112" text-anchor="middle" font-size="13" font-weight="700" fill="#2f8a55">done</text>
+<line x1="100" y1="220.0" x2="960" y2="220.0" stroke="#ddd"/>
+<text x="96" y="224.0" text-anchor="end" font-size="11" fill="#999">愉悦度 0</text>
+<text x="96" y="144.0" text-anchor="end" font-size="11" fill="#999">+1</text>
+<text x="96" y="304.0" text-anchor="end" font-size="11" fill="#999">-1</text>
+<rect x="143.0" y="276.0" width="54" height="56.0" rx="4" fill="#3a6ea5" opacity="0.85"/>
+<text x="170.0" y="252.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#3a6ea5">-0.70</text>
+<text x="170.0" y="325" text-anchor="middle" font-size="13" fill="#222">第 1 轮</text>
+<text x="170.0" y="345" text-anchor="middle" font-size="12" font-weight="600" fill="#3a6ea5">情绪 疲惫</text>
+<text x="170.0" y="363" text-anchor="middle" font-size="10.5" fill="#888">置信度 0.72</text>
+<rect x="313.0" y="204.0" width="54" height="16.0" rx="4" fill="#2f8a55" opacity="0.85"/>
+<text x="340.0" y="200.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f8a55">+0.20</text>
+<text x="340.0" y="325" text-anchor="middle" font-size="13" fill="#222">第 2 轮</text>
+<text x="340.0" y="345" text-anchor="middle" font-size="12" font-weight="600" fill="#2f8a55">情绪 疲惫</text>
+<text x="340.0" y="363" text-anchor="middle" font-size="10.5" fill="#888">置信度 0.68</text>
+<rect x="483.0" y="208.0" width="54" height="12.0" rx="4" fill="#b03a3a" opacity="0.85"/>
+<text x="510.0" y="202.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b03a3a">+0.15</text>
+<text x="510.0" y="325" text-anchor="middle" font-size="13" fill="#222">第 3 轮</text>
+<text x="510.0" y="345" text-anchor="middle" font-size="12" font-weight="600" fill="#b03a3a">情绪 ⚠ 解析失败</text>
+<text x="510.0" y="363" text-anchor="middle" font-size="10.5" fill="#888">置信度 0.10</text>
+<rect x="653.0" y="212.0" width="54" height="8.0" rx="4" fill="#2f8a55" opacity="0.85"/>
+<text x="680.0" y="204.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f8a55">+0.10</text>
+<text x="680.0" y="325" text-anchor="middle" font-size="13" fill="#222">第 4 轮</text>
+<text x="680.0" y="345" text-anchor="middle" font-size="12" font-weight="600" fill="#2f8a55">情绪 紧张</text>
+<text x="680.0" y="363" text-anchor="middle" font-size="10.5" fill="#888">置信度 0.68</text>
+<rect x="823.0" y="172.0" width="54" height="48.0" rx="4" fill="#2f8a55" opacity="0.85"/>
+<text x="850.0" y="184.0" text-anchor="middle" font-size="12.5" font-weight="700" fill="#2f8a55">+0.60</text>
+<text x="850.0" y="325" text-anchor="middle" font-size="13" fill="#222">第 5 轮</text>
+<text x="850.0" y="345" text-anchor="middle" font-size="12" font-weight="600" fill="#2f8a55">情绪 愉悦</text>
+<text x="850.0" y="363" text-anchor="middle" font-size="10.5" fill="#888">置信度 0.64</text>
+<text x="170.0" y="405.0" text-anchor="middle" font-size="11" fill="#333">opening → main（轮次1 / 27s）</text>
+<text x="340.0" y="405.0" text-anchor="middle" font-size="11" fill="#333">main → main（轮次2 / 75s）</text>
+<text x="510.0" y="405.0" text-anchor="middle" font-size="11" fill="#333">main → main（轮次3 / 129s）</text>
+<text x="680.0" y="405.0" text-anchor="middle" font-size="11" fill="#333">main → closing（轮次4 / 166s）</text>
+<text x="850.0" y="405.0" text-anchor="middle" font-size="11" fill="#333">closing → done（轮次5 / 190s）</text>
+<text x="96" y="70" font-size="12" fill="#666">底色 = 该轮所在相位</text>
+<text x="96" y="440" font-size="11.5" fill="#b03a3a">第 3 轮模型未输出 &lt;emotion&gt; 标签，情绪退回关键词「平静」，但相位照常推进 —— 情绪失败不影响状态机。</text>
+</svg>

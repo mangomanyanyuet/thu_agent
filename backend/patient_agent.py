@@ -20,7 +20,9 @@ import random
 import re
 from dataclasses import dataclass, field
 
+import patient_voice
 from llm import complete, using_mock
+from patient_voice import VoiceConfig
 
 # ================================================================== 维度一：风格
 # 决定「怎么说话」。与严重程度正交：同一严重程度可以是掩饰型也可以是倾诉型。
@@ -318,6 +320,9 @@ class PatientTurn:
     source: str = "llm"               # llm | scripted | fallback
     redacted: bool = False            # 是否触发过方法类红线过滤
     note: str = ""
+    # 本轮语音：与线上 /api/chat 同一个 VoiceMeta 结构；None = 本轮不带语音
+    voice: dict | None = None
+    voice_info: dict = field(default_factory=dict)   # 语音产出过程的可观测信息
 
 
 @dataclass
@@ -335,7 +340,13 @@ class PatientAgent:
     severity: int = 3
     seed: int | None = None
     total_turns: int = 6
+    # 语音联路开关。默认 off —— 不开启时行为与加语音功能之前完全一致
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
     rng: random.Random = field(init=False, repr=False)
+    # 语音专用随机流：绝不能复用 rng，否则同 seed 的文本对白会整体漂移
+    vrng: random.Random = field(init=False, repr=False)
+    _state_turn: int = field(init=False, repr=False, default=0)
+    _state: dict = field(init=False, repr=False, default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.style not in STYLES:
@@ -345,6 +356,7 @@ class PatientAgent:
         # seed 为空时随机取一个，但要**回写**到 self.seed，让调用方能记录与复现
         self.seed = self.seed if self.seed is not None else random.randrange(10 ** 9)
         self.rng = random.Random(self.seed)
+        self.vrng = random.Random(f"{self.seed}-voice")
         self.total_turns = max(1, self.total_turns)
 
         self.turn = 0
@@ -403,18 +415,56 @@ class PatientAgent:
         ]
         return self.rng.choice(extra)
 
+    # ---------------------------------------------------------------- 本轮状态
+    def _turn_state(self, turn: int) -> dict:
+        """本轮的 mood / openness / cooperation（语音侧也要用，故抽出来缓存）。
+
+        采样顺序必须保持 mood -> openness -> cooperation：与原先 `build_system()`
+        内部的求值顺序一致，否则同 seed 的文本会整体漂移（方案 §8 的 V6 回归）。
+        缓存后由 `build_system()` 与语音侧共用，不会二次采样。
+        """
+        if self._state_turn == turn and self._state:
+            return self._state
+        self._state = {"mood": self._mood(), "openness": self._openness(turn),
+                       "cooperation": self._cooperation()}
+        self._state_turn = turn
+        return self._state
+
+    def _make_voice(self, text: str, turn: int,
+                    ceiling: int) -> tuple[dict | None, dict]:
+        """按本轮状态生成语音（VoiceMeta）。off 时返回 (None, {})。
+
+        状态在这里才采样：文本已经定下来之后，rng 的消耗顺序才不会因为
+        开/关语音而变（方案 §8 的 V6）。
+        """
+        if self.voice.mode == "off":
+            return None, {}
+        # 文本侧（build_system）已采样过就直接复用；没有（mock/兜底台词路径）
+        # 就用**语音自己的随机流**补，绝不动 self.rng —— 否则开语音会把
+        # 后续轮次的台词带偏（方案 §8 的 V6）
+        state = self._state if self._state_turn == turn else {
+            "openness": self.vrng.randint(1, 10),
+            "cooperation": self.vrng.choice(COOPERATION),
+        }
+        plan = patient_voice.plan_for(
+            style=self.style, severity=self.severity, turn=turn,
+            total_turns=self.total_turns, ceiling=ceiling,
+            openness=int(state.get("openness", 5) or 5),
+            cooperation=str(state.get("cooperation", "")),
+            consistency=self.voice.consistency, rng=self.vrng)
+        return patient_voice.make_voice(text, plan, self.voice)
+
     # ---------------------------------------------------------------- Prompt
     def build_system(self, turn: int, ceiling: int) -> str:
         st, sv = STYLES[self.style], SEVERITIES[self.severity]
+        s = self._turn_state(turn)
         return PATIENT_SYSTEM.format(
             persona=self.persona,
             style_name=st["name"], style_desc=st["desc"],
             style_dos=st["dos"], style_donts=st["donts"], length=st["length"],
             sev_name=sv["name"], sev_target=sv["target"], sev_desc=sv["desc"],
             ceiling=f"[{ceiling}] {DISCLOSURE_LADDER[ceiling]}",
-            mood=self._mood(),
-            openness=self._openness(turn),
-            cooperation=self._cooperation(),
+            mood=s["mood"], openness=s["openness"], cooperation=s["cooperation"],
         )
 
     def build_user(self, turn: int, ceiling: int, situation: str,
@@ -449,11 +499,15 @@ class PatientAgent:
             # 宁可少说，不可造出方法类语料
             text, source, note = self._scripted(ceiling), "fallback", "命中方法类红线，已替换"
 
+        # 语音在红线过滤之后再生成：合成用的文本必须是最终要说的那句
+        voice, voice_info = self._make_voice(text, turn, ceiling)
+
         self.said.append(text)
         self.doctors.append(doctor_text or "")
         return PatientTurn(text=text, turn=turn, ceiling=ceiling,
                            situation=situation, beat=beat,
-                           source=source, redacted=redacted, note=note)
+                           source=source, redacted=redacted, note=note,
+                           voice=voice, voice_info=voice_info)
 
     def _call_llm(self, turn: int, ceiling: int, situation: str,
                   beat: str, doctor: str) -> str:
@@ -480,11 +534,12 @@ class PatientAgent:
     def say(self, text: str, doctor_text: str = "") -> PatientTurn:
         """记一句**外部指定**的话（不走生成），用于复现某一句特定的表达。"""
         self.turn += 1
+        voice, voice_info = self._make_voice(text, self.turn, self._max_ceiling)
         self.said.append(text)
         self.doctors.append(doctor_text or "")
         return PatientTurn(text=text, turn=self.turn, ceiling=self._max_ceiling,
                            situation="（外部指定）", beat="（外部指定）",
-                           source="given")
+                           source="given", voice=voice, voice_info=voice_info)
 
     def _scripted(self, ceiling: int) -> str:
         pool = SCRIPTED_LINES.get(ceiling) or SCRIPTED_LINES[3]
@@ -508,6 +563,7 @@ class PatientAgent:
             "seed": self.seed,
             "persona": self.persona,
             "total_turns": self.total_turns,
+            "voice_mode": self.voice.mode,
         }
 
 

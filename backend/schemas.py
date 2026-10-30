@@ -84,6 +84,13 @@ class SimTurnRequest(PatientProfile):
                              pattern="^(approve|override|reject|none)$")
     seed: int | None = None
     turns: int = Field(default=6, ge=1, le=20)   # 总轮数，用于披露曲线
+    # ---- 语音联路（默认 off，行为与加语音前完全一致）----
+    voice: str = Field(default="off", pattern="^(off|synth|tts)$")
+    voice_consistency: str = Field(default="auto",
+                                   pattern="^(auto|mask|consistent)$")
+    tts_backend: str = Field(default="auto", pattern="^(auto|macos|edge)$")
+    # 转写为空时是否照真实行为送空文本（默认用原话兜底，保证对练能跑完）
+    strict_asr: bool = False
 
 
 class SimRunRequest(SimTurnRequest):

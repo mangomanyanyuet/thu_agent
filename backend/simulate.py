@@ -27,6 +27,7 @@ from typing import Any
 
 import patient_agent
 from patient_agent import PatientAgent, PatientTurn, list_profiles
+from patient_voice import VoiceConfig
 
 
 # ------------------------------------------------------------------ 打印
@@ -40,6 +41,29 @@ def _fmt_channels(ch: dict) -> str:
         return int((ch.get(key) or {}).get("level") or 0)
 
     return f"{lv('rule')}/{lv('model')}/{lv('multimodal')}/{lv('scale')}"
+
+
+def _mm_level(ch: dict) -> int:
+    """多模态通道等级 —— 语音贡献是否生效，全看这一项。"""
+    return int((ch.get("multimodal") or {}).get("level") or 0)
+
+
+def _fmt_voice(v: dict) -> str:
+    """一行说清本轮声音：语气、关键指标、来源、是否可信。"""
+    af = v.get("audio_features") or {}
+    marks = []
+    if v.get("voice_source") == "fallback":
+        marks.append(f"回落synth:{v.get('tts_error', '')}")
+    if v.get("voice_source") == "tts":
+        marks.append(f"tts={v.get('tts_backend', '')}")
+    if not v.get("tone_verified", True):
+        marks.append("未命中目标语气")
+    if v.get("asr_text_miss"):
+        marks.append("转写为空")
+    return (f"tone={v.get('tone', '-')}（F0σ{af.get('f0_std', '-')}/"
+            f"语速{af.get('syllable_rate', '-')}/"
+            f"停顿{af.get('pause_ratio', '-')}）"
+            + (f" [{'；'.join(marks)}]" if marks else ""))
 
 
 def print_profiles() -> None:
@@ -56,13 +80,14 @@ def print_profiles() -> None:
 
 # ------------------------------------------------------------------ 会话
 def new_sim_session(user_id: str, style: str, severity: int,
-                    seed: int | None, turns: int) -> tuple[str, PatientAgent]:
+                    seed: int | None, turns: int,
+                    voice: VoiceConfig | None = None) -> tuple[str, PatientAgent]:
     """建会话 + 建病人 Agent，并给会话打上 [SIM] 标记。"""
     import graph
     import storage
 
-    patient = PatientAgent(style=style, severity=severity,
-                           seed=seed, total_turns=turns)
+    patient = PatientAgent(style=style, severity=severity, seed=seed,
+                           total_turns=turns, voice=voice or VoiceConfig())
     sid = graph.new_session(user_id)
 
     # 模拟数据混在真实会话里很难分辨，事后清理全靠这个标记
@@ -83,17 +108,23 @@ _PATIENT_CAP = 200
 
 
 def patient_of(sid: str, style: str, severity: int, seed: int | None,
-               turns: int) -> PatientAgent:
-    """取（或建）该会话的病人 Agent。风格/严重程度变了就重建。"""
+               turns: int, voice: VoiceConfig | None = None) -> PatientAgent:
+    """取（或建）该会话的病人 Agent。风格/严重程度变了就重建。
+
+    语音配置不参与重建判断 —— 它不影响文本侧状态，改开关直接覆盖即可。
+    """
     p = _PATIENTS.get(sid)
     if p is None or p.style != style or p.severity != severity:
-        p = PatientAgent(style=style, severity=severity, seed=seed, total_turns=turns)
+        p = PatientAgent(style=style, severity=severity, seed=seed,
+                         total_turns=turns, voice=voice or VoiceConfig())
         _PATIENTS[sid] = p
         if len(_PATIENTS) > _PATIENT_CAP:
             for k in list(_PATIENTS)[:len(_PATIENTS) - _PATIENT_CAP]:
                 _PATIENTS.pop(k, None)
     else:
         p.total_turns = max(1, turns)   # 轮数可能被前端改过
+        if voice is not None:
+            p.voice = voice
     return p
 
 
@@ -118,22 +149,38 @@ def run_one_turn(user_id: str, sid: str, patient: PatientAgent,
 
     `patient_text` 给了就直接用，不再生成（用于复现特定句子）。
     `auto_review == "none"` 时不放行，把挂起状态原样返回给调用方。
+
+    语音：`pt.voice` 由病人 Agent 产出，结构与线上 `/api/asr` 的返回一致
+    （`VoiceMeta`），这里**原样传给同一个 `graph.run_turn()`** —— 诊断侧
+    逻辑与真实用户在 UI 上说话时完全同一份代码（方案 C1）。
     """
     import graph
 
     pt: PatientTurn = (patient.say(patient_text, doctor_reply)
                        if patient_text else patient.next(doctor_reply))
 
+    # tts 档送进诊断侧的是**转写文本**（真实链路如此）；转写为空时，
+    # 非 strict 用原话兜底，strict 照真实行为送空文本
+    vi = pt.voice_info or {}
+    sent = pt.text
+    if vi.get("voice_source") == "tts":
+        asr_text = vi.get("asr_text", "")
+        if asr_text or vi.get("strict"):
+            sent = asr_text
+
     t0 = time.monotonic()
-    res = graph.run_turn(user_id, sid, pt.text)
+    res = graph.run_turn(user_id, sid, sent, voice=pt.voice)
     dt_ms = int((time.monotonic() - t0) * 1000)
 
     record: dict[str, Any] = {
         "turn": pt.turn,
         "patient": pt.text,
+        "sent_text": sent,
         "patient_meta": {"ceiling": pt.ceiling, "situation": pt.situation,
                          "beat": pt.beat, "source": pt.source,
                          "redacted": pt.redacted, "note": pt.note},
+        "voice": {**vi, "tone": (pt.voice or {}).get("tone", ""),
+                  "audio_features": (pt.voice or {}).get("audio_features", {})},
         "doctor": res.get("reply", ""),
         "risk_level": res.get("risk_level", "none"),
         "channels": res.get("channels", {}),
@@ -158,7 +205,7 @@ def run_session(user_id: str, style: str, severity: int, turns: int,
                 stop_on_crisis: bool = False,
                 session_id: str | None = None,
                 patient: PatientAgent | None = None,
-                on_turn=None) -> dict[str, Any]:
+                on_turn=None, voice: VoiceConfig | None = None) -> dict[str, Any]:
     """连续跑多轮，返回完整对练记录。`on_turn(record)` 用于 CLI 边跑边打。
 
     `patient` 可由调用方预先建好（CLI 需要先打印它的元信息再开跑），
@@ -170,11 +217,13 @@ def run_session(user_id: str, style: str, severity: int, turns: int,
             if not storage.get_session(session_id):
                 raise KeyError(session_id)
             sid = session_id
-            patient = patient_of(sid, style, severity, seed, turns)
+            patient = patient_of(sid, style, severity, seed, turns, voice=voice)
         else:
-            sid, patient = new_sim_session(user_id, style, severity, seed, turns)
+            sid, patient = new_sim_session(user_id, style, severity, seed, turns,
+                                           voice=voice)
     else:
-        sid = session_id or new_sim_session(user_id, style, severity, seed, turns)[0]
+        sid = session_id or new_sim_session(user_id, style, severity, seed, turns,
+                                            voice=voice)[0]
     _PATIENTS[sid] = patient
 
     transcript: list[dict[str, Any]] = []
@@ -234,6 +283,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
               f"{_fmt_channels(rec['channels']):<10} "
               f"情绪={rec['emotion'] or '-'}  "
               f"CBT={rec['cbt_stage'] or '-'}  {rec['latency_ms']}ms")
+        if (rec.get("voice") or {}).get("tone"):
+            print(f"  声音 {_fmt_voice(rec['voice'])} → mm="
+                  f"{_mm_level(rec['channels'])}")
         print(f"  < {_short(rec['doctor'], 100)}")
         if rec["patient_meta"]["note"]:
             print(f"  · {rec['patient_meta']['note']}")
@@ -260,20 +312,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     print(f"      seed={info['seed']}  身份={info['persona']}  轮数={args.turns}")
     print(f"LLM ：{'MockLLM（离线台词）' if using_mock() else '真实模型'}"
           f"   中断后自动处理={args.auto_review}")
+    print(f"语音：{args.voice}"
+          + (f"（一致性={args.voice_consistency} 后端={args.tts_backend}"
+             + (f" 落盘={args.keep_audio_dir}" if args.keep_audio_dir else "")
+             + (" strict" if args.strict_asr else "")
+             if args.voice != "off" else ""))
     print("=" * 74)
 
+    voice = VoiceConfig(mode=args.voice, consistency=args.voice_consistency,
+                        backend=args.tts_backend, audio_dir=args.keep_audio_dir,
+                        strict=args.strict_asr)
+    patient.voice = voice
     out = run_session(args.user_id, args.style, args.severity, args.turns,
                       seed=args.seed, auto_review=args.auto_review,
                       stop_on_crisis=args.stop_on_crisis,
-                      session_id=sid, patient=patient, on_turn=on_turn)
+                      session_id=sid, patient=patient, on_turn=on_turn,
+                      voice=voice)
     out["profile"] = info
 
     print("\n" + "=" * 74)
-    print("轮次  风险        通道(r/m/mm/s)  情绪      CBT阶段")
+    print("轮次  风险        通道(r/m/mm/s)  情绪      CBT阶段   声音")
     for r in out["transcript"]:
+        tone = (r.get("voice") or {}).get("tone") or "-"
         print(f"  {r['turn']:<3}  {r['risk_level']:<10}  "
               f"{_fmt_channels(r['channels']):<14}  "
-              f"{r['emotion'] or '-':<7}  {r['cbt_stage'] or '-'}")
+              f"{r['emotion'] or '-':<7}  {r['cbt_stage'] or '-':<9}  {tone}")
     print(f"\n风险轨迹：{' -> '.join(out['risk_track']) or '（无）'}")
     print(f"危机分支：{'第 %d 轮' % out['crisis_at_turn'] if out['crisis_at_turn'] else '未触发'}")
     ia = out["interrupted_at_turn"]
@@ -311,11 +374,31 @@ def main() -> None:
                     help="进入危机分支并放行后立即结束")
     ap.add_argument("--json", metavar="PATH", help="把完整对练记录写成 JSON")
     ap.add_argument("--quiet", action="store_true", help="只打印汇总，不打印逐轮对话")
+    # ---- 语音联路 ----
+    ap.add_argument("--voice", default="off", choices=["off", "synth", "tts"],
+                    help="语音联路：off=纯文本（默认）｜synth=合成声学特征｜"
+                         "tts=先合成音频再走 asr.transcribe()")
+    ap.add_argument("--voice-consistency", default="auto",
+                    choices=["auto", "mask", "consistent"],
+                    help="auto=按风格修正｜mask=声音直挂内心状态（造掩饰样本）｜"
+                         "consistent=声音与嘴上说的一致（对照组）")
+    ap.add_argument("--tts-backend", default="auto", choices=["auto", "macos", "edge"],
+                    help="TTS 后端；auto 优先离线后端（macos say）")
+    ap.add_argument("--keep-audio-dir", metavar="PATH", default="",
+                    help="tts 档把每轮音频落盘，供人工试听/做回归样本")
+    ap.add_argument("--strict-asr", action="store_true",
+                    help="ASR 转写为空时照真实行为送空文本（默认用原话兜底）")
     args = ap.parse_args()
 
     if args.list:
         print_profiles()
         return
+    if args.voice != "off":
+        import tts
+
+        backend, why = tts.available(args.tts_backend) if args.voice == "tts" else ("synth", "")
+        if args.voice == "tts" and not backend:
+            print(f"⚠ 无可用 TTS 后端（{why}），将回落到 synth（合成特征）")
     run(args)
 
 

@@ -277,6 +277,22 @@ def _sim_enabled() -> None:
         raise HTTPException(403, "病人模拟未开启（ENABLE_PATIENT_SIM=0）")
 
 
+@app.get(f"{settings.api_prefix}/sim/voice/status")
+def sim_voice_status():
+    """语音联路的可用性（前端据此决定 tts 档是否可选）。
+
+    与 `/api/asr/status` 同理：把「没装」和「装了但用不了」分开说，
+    否则开关亮着却永远跑不出声音。
+    """
+    _sim_enabled()
+    import asr
+    import tts
+
+    info = tts.describe()
+    return {**info, "asr_available": asr.asr_available(),
+            "asr_model_ready": asr.model_ready()}
+
+
 @app.get(f"{settings.api_prefix}/sim/profiles")
 def sim_profiles():
     """可选的风格 / 严重程度清单，供前端下拉框使用。"""
@@ -307,7 +323,12 @@ def sim_turn(req: SimTurnRequest):
         raise HTTPException(404, "session 不存在")
 
     # 按会话复用：否则每点一次「跑一轮」披露曲线都从第 1 级重开
-    patient = simulate.patient_of(sid, req.style, req.severity, req.seed, req.turns)
+    from patient_voice import VoiceConfig
+
+    patient = simulate.patient_of(
+        sid, req.style, req.severity, req.seed, req.turns,
+        voice=VoiceConfig(mode=req.voice, consistency=req.voice_consistency,
+                          backend=req.tts_backend, strict=req.strict_asr))
     rec = simulate.run_one_turn(req.user_id, sid, patient,
                                 doctor_reply=simulate.last_assistant_text(sid),
                                 patient_text=req.patient_text,
@@ -330,11 +351,15 @@ def sim_run(req: SimRunRequest):
     if req.severity not in SEVERITIES:
         raise HTTPException(400, "严重程度须为 1~5")
 
+    from patient_voice import VoiceConfig
+
     try:
         out = simulate.run_session(
             req.user_id, req.style, req.severity, req.turns,
             seed=req.seed, auto_review=req.auto_review,
             stop_on_crisis=req.stop_on_crisis, session_id=req.session_id,
+            voice=VoiceConfig(mode=req.voice, consistency=req.voice_consistency,
+                              backend=req.tts_backend, strict=req.strict_asr),
         )
     except KeyError:
         raise HTTPException(404, "session 不存在") from None

@@ -115,21 +115,49 @@ def t_risk_rules() -> None:
 
 
 # ------------------------------------------------------------------ V6 文本回归
-def t_text_regression(turns: int = 6) -> None:
-    print(f"\n[V6] 文本回归：同一 seed 下 开语音 vs 关语音 文本必须逐字相同")
+def t_text_regression(turns: int = 3) -> None:
+    """V6：开语音不能动到文本侧。
+
+    ⚠ 判据必须是 **prompt 级**，不能直接比生成文本：`config.llm_temperature`
+    硬编码 0.4 且无环境变量可关，真实模型下同一 seed 跑两次本就不同
+    （实测关语音跑两次也常常不一样）。比文本只会得到假失败。
+    """
+    print(f"\n[V6] 文本回归：开/关语音 喂给模型的 prompt 必须逐字相同")
     from patient_agent import PatientAgent
 
+    def prompts(cfg: VoiceConfig) -> list[str]:
+        p = PatientAgent(style="guarded", severity=4, seed=42,
+                         total_turns=turns, voice=cfg)
+        out = []
+        for _ in range(turns):
+            p.turn += 1
+            t = p.turn
+            c = p._ceiling(t)
+            s = p._situation()
+            b = p._beat(t)
+            out.append(p.build_system(t, c) + "||"
+                       + p.build_user(t, c, s, b, "嗯，我在听。"))
+            p._make_voice("测试一句话", t, c)      # 语音侧，真实路径走缓存
+        return out
+
+    a = prompts(VoiceConfig())
+    b = prompts(VoiceConfig(mode="synth", consistency="mask"))
+    same = a == b
+    check(same, "开/关语音 prompt 逐字相同（独立 RNG 流生效）",
+          "" if same else next((f"第 {i+1} 轮不同" for i, (x, y)
+                                in enumerate(zip(a, b)) if x != y), ""))
+
+    # 采样噪声对照：让"文本比对不可靠"这件事被看见，而不是被误判成缺陷
     def texts(cfg: VoiceConfig) -> list[str]:
         p = PatientAgent(style="guarded", severity=4, seed=42,
                          total_turns=turns, voice=cfg)
         return [p.next("嗯，我在听。").text for _ in range(turns)]
 
-    off = texts(VoiceConfig())
-    on = texts(VoiceConfig(mode="synth", consistency="mask"))
-    same = off == on
-    check(same, "开/关语音文本一致（独立 RNG 流生效）",
-          f"off[0]={off[0]!r} on[0]={on[0]!r}" if not same else "")
-    print(f"      样例：{off[0]}")
+    t1 = texts(VoiceConfig())
+    t2 = texts(VoiceConfig())
+    print(f"      [参考] 关语音连跑两次文本一致：{t1 == t2}"
+          "（False 属正常：temperature=0.4 采样有随机性）")
+    print(f"      样例：{t1[0]}")
 
 
 # ------------------------------------------------------------------ T2 端到端

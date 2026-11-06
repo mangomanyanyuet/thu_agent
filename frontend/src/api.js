@@ -133,6 +133,74 @@ export const api = {
     req(`/risk/${id}/handle?reviewer=${encodeURIComponent(reviewer)}&note=${encodeURIComponent(note)}`,
       { method: 'POST' }),
   traces: (sid) => req(`/traces/${sid}`),
+
+  // ---- 风险规则配置（P0：上传/试跑/发布，医生在审核台操作）----
+  riskRulesOverview: () => req('/risk-rules'),
+  riskRulesVersions: () => req('/risk-rules/versions'),
+  // 直接粘贴文本上传（文件对话框不可用时的兜底）
+  riskRulesUploadText: (content, filename, note) =>
+    req('/risk-rules/upload-text', {
+      method: 'POST',
+      body: JSON.stringify({ content, filename: filename || 'config.json', note: note || '' }),
+    }),
+  riskRulesPreview: (payload) =>
+    req('/risk-rules/preview', { method: 'POST', body: JSON.stringify(payload) }),
+  riskRulesPublish: (version, reason) =>
+    req(`/risk-rules/publish/${encodeURIComponent(version)}?reason=${encodeURIComponent(reason || '')}`,
+      { method: 'POST' }),
+  riskRulesRollback: (version, reason) =>
+    req(`/risk-rules/rollback/${encodeURIComponent(version)}?reason=${encodeURIComponent(reason || '')}`,
+      { method: 'POST' }),
+
+  // 上传配置（multipart，不能设 Content-Type，让浏览器带 boundary）
+  riskRulesUpload: async (file, note) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('note', note || '')
+    const res = await fetch(`${BASE}/risk-rules/upload`, {
+      method: 'POST',
+      body: form,
+      headers: authHeaders(),
+    })
+    if (res.status === 401) {
+      onUnauthorized()
+      throw new Error('登录已过期，请重新登录')
+    }
+    if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 300)}`)
+    return res.json()
+  },
+
+  // 下载模板 / 导出当前配置（触发浏览器保存文件）
+  riskRulesDownload: async (kind, fmt = 'csv', filename = '') => {
+    const path = kind === 'export'
+      ? `/risk-rules/export?fmt=${fmt}`
+      : `/risk-rules/template?fmt=${fmt}`
+    const res = await fetch(BASE + path, { headers: authHeaders() })
+    if (res.status === 401) { onUnauthorized(); throw new Error('登录已过期') }
+    if (!res.ok) throw new Error(`${res.status} ${(await res.text()).slice(0, 200)}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename || (fmt === 'csv' ? 'risk_words.csv' : 'risk_rules.json')
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  },
+
+  // ---- 日记 / 心情（豆包式改版）----
+  diaryGenerate: (payload) =>
+    req('/diary/generate', { method: 'POST', body: JSON.stringify(payload) }),
+  diaryList: (userId, limit = 30) =>
+    req(`/diary/${encodeURIComponent(userId)}?limit=${limit}`),
+
+  // 同步对话（通话页用；不走 SSE，直接拿完整结果去做 TTS 朗读）
+  chatSync: (userId, sessionId, text, voice) =>
+    req('/chat', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, session_id: sessionId, text, voice }),
+    }),
 }
 
 /**

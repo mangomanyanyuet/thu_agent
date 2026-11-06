@@ -9,9 +9,14 @@ import ProfileView from './views/ProfileView.jsx'
 import ReviewView from './views/ReviewView.jsx'
 import TraceView from './views/TraceView.jsx'
 import EventTraceView from './views/EventTraceView.jsx'
+import HomeView from './views/HomeView.jsx'
+import TalkView from './views/TalkView.jsx'
+import DiaryView from './views/DiaryView.jsx'
 import { RISK_META } from './theme.js'
+import { mediaDiagnosis } from './env.js'
 
-const TABS = [
+// 专业版（原有能力）保留为一层，豆包式首页为默认入口
+const PRO_TABS = [
   { key: 'companion', label: '视频语音陪伴', comp: CompanionView },
   { key: 'chat', label: '对话', comp: ChatView },
   { key: 'daily', label: '每日记录', comp: DailyView },
@@ -23,27 +28,30 @@ const TABS = [
 ]
 
 export default function App() {
-  // 登录态：user_id 由服务端在登录时下发，不再由客户端随意指定
   const [auth, setAuth] = useState(() => session.get())
-  const [tab, setTab] = useState('companion')
+  const [view, setView] = useState('home')   // home | talk | chat | diary | pro
+  const [talkKind, setTalkKind] = useState('voice')
+  const [chatSeed, setChatSeed] = useState(null) // 从首页带进文字对话的首句 {text, voice, key}
+  const [tab, setTab] = useState('companion') // 专业版内部 tab
   const [sessionId, setSessionId] = useState(localStorage.getItem('mt_sid') || '')
   const [overview, setOverview] = useState(null)
   const [health, setHealth] = useState(null)
   const [sessions, setSessions] = useState([])
-  // 当前视图（对话 / 陪伴）刚上报的本轮风险等级
   const [liveRisk, setLiveRisk] = useState('')
   const [error, setError] = useState('')
+  const [mediaDiag] = useState(() => mediaDiagnosis())
   const creatingRef = useRef(null)
+  const seedKeyRef = useRef(0)
 
   const userId = auth.user_id || ''
 
+  const httpsHint = !mediaDiag.ok ? `https://${window.location.hostname}:8443` : ''
+
   useEffect(() => {
     if (sessionId) localStorage.setItem('mt_sid', sessionId)
-    // 换会话就丢弃上一轮的实时等级，避免沿用旧值
     setLiveRisk('')
   }, [sessionId])
 
-  // 任意请求返回 401 时回到登录页（api.js 会派发该事件）
   useEffect(() => {
     const onUnauth = () => setAuth({ token: '', user_id: '', username: '' })
     window.addEventListener('mt:unauthorized', onUnauth)
@@ -58,156 +66,175 @@ export default function App() {
         api.health(),
         api.listSessions(userId).catch(() => []),
       ])
-      setOverview(ov)
-      setHealth(h)
-      setSessions(sl || [])
-      setError('')
-    } catch (e) {
-      setError(String(e.message || e))
-    }
+      setOverview(ov); setHealth(h); setSessions(sl || []); setError('')
+    } catch (e) { setError(String(e.message || e)) }
   }, [userId])
 
-  useEffect(() => {
-    refreshOverview()
-  }, [refreshOverview])
+  useEffect(() => { refreshOverview() }, [refreshOverview])
 
-  // 并发保护：两次调用都读到 sessionId 为空时会各建一个会话，
-  // 后一次 setSessionId 生效 -> 顶部徽章指向那个从未使用的空会话，
-  // 表现就是"真实会话已经 high，徽章却一直显示无风险"。
   const ensureSession = useCallback(async () => {
     if (sessionId) return sessionId
     if (creatingRef.current) return creatingRef.current
     creatingRef.current = (async () => {
       try {
         const { session_id: sid } = await api.createSession(userId)
-        setSessionId(sid)
-        refreshOverview() // 让顶部徽章拿到新会话的等级
-        return sid
-      } finally {
-        creatingRef.current = null
-      }
+        setSessionId(sid); refreshOverview(); return sid
+      } finally { creatingRef.current = null }
     })()
     return creatingRef.current
   }, [sessionId, userId, refreshOverview])
 
+  const newSession = useCallback(async () => {
+    const { session_id: sid } = await api.createSession(userId)
+    setSessionId(sid); refreshOverview(); return sid
+  }, [userId, refreshOverview])
+
   const handleLogout = async () => {
-    try {
-      await api.logout()
-    } catch {
-      /* 服务端 token 可能已过期，本地照常清理 */
-    }
-    session.clear()
-    localStorage.removeItem('mt_sid')
-    setSessionId('')
-    setOverview(null)
-    setSessions([])
-    setLiveRisk('')
+    try { await api.logout() } catch { /* ignore */ }
+    session.clear(); localStorage.removeItem('mt_sid')
+    setSessionId(''); setOverview(null); setSessions([]); setLiveRisk('')
     setAuth({ token: '', user_id: '', username: '' })
-    setTab('companion')
+    setView('home'); setTab('companion')
   }
 
-  // 未登录 -> 登录页
+  // 通话结束后回到首页/日记：开一个新会话，让下次通话是干净的
+  const onTalkExit = useCallback(async (target) => {
+    try { await newSession() } catch { /* ignore */ }
+    setView(target === 'diary' ? 'diary' : 'home')
+  }, [newSession])
+
+  const startTalk = useCallback((kind) => {
+    setTalkKind(kind); setView('talk')
+  }, [])
+
+  // 首页首句直达文字对话：只切视图，发送与流式回复由 ChatView 负责
+  const startChat = useCallback((seed) => {
+    setChatSeed(seed?.text ? { ...seed, key: ++seedKeyRef.current } : null)
+    setView('chat')
+  }, [])
+
   if (!auth.token || !auth.user_id) {
     return <LoginView onAuthed={setAuth} />
   }
 
-  // 「当前风险」= 当前正在进行中的会话的等级，优先级：
-  //   1) liveRisk —— 当前视图（对话/陪伴）刚上报的实时等级，最直接；
-  //   2) 当前会话持久化的 session.last_risk。
-  // 不能只查 session 表：陪伴会话是 cmp_*，**根本不写 session 表**，
-  // 在陪伴页按 sessionId 查会永远得到 none。
-  // 也不能退回"全局最新未处理 flag"：那样只要历史上出现过一次危机且未审核，
-  // 新建会话后顶部就永远挂着「重度」，与实际会话状态无关。
-  // 历史未处理事件另有去处 ——「人工审核台」页与标签页红点。
   const currentSession = (sessions || []).find((s) => s.id === sessionId)
   const latestRisk = liveRisk || currentSession?.last_risk || 'none'
   const risk = RISK_META[latestRisk] || RISK_META.none
 
-  const Active = TABS.find((t) => t.key === tab).comp
+  const childProps = {
+    userId, sessionId, ensureSession, overview,
+    refresh: refreshOverview, onRisk: setLiveRisk,
+  }
+
+  // 顶部账号条（所有视图共用，做得比原控制台简洁）
+  const accountBar = (compact) => (
+    <div className={compact ? 'mini-top' : 'topbar'}>
+      <div className="brand" onClick={() => setView('home')} style={{ cursor: 'pointer' }}>
+        <span className="logo">MT</span>
+        {!compact && <div><h1>MindTrace</h1><p>你的情绪陪伴助手</p></div>}
+      </div>
+      <div className="controls">
+        <div className="who">
+          <span className="who-avatar">{(auth.username || '?')[0].toUpperCase()}</span>
+          {!compact && <div className="who-text"><b>{auth.username}</b></div>}
+        </div>
+        {view !== 'home' && (
+          <button className="btn ghost" onClick={() => setView('home')}>首页</button>
+        )}
+        {compact && view === 'pro' && (
+          <button className="btn ghost" onClick={() => setView('home')}>返回简洁版</button>
+        )}
+        {!compact && (
+          <>
+            <span className="badge" style={{ color: risk.color, background: risk.bg }}>
+              当前风险：{risk.label}
+            </span>
+            {health && <span className="badge subtle">LLM: {health.llm_provider}</span>}
+          </>
+        )}
+        <button className="btn ghost" onClick={handleLogout}>登出</button>
+      </div>
+    </div>
+  )
+
+  const mediaNotice = !mediaDiag.ok && (
+    <div className="media-notice">
+      <b>⚠ 语音与视频不可用</b>：{mediaDiag.reason}。
+      {httpsHint && (
+        <> 请用 HTTPS 打开：<a href={httpsHint} target="_blank" rel="noreferrer">{httpsHint}</a>
+          （证书自签，提示"不安全"时选"继续访问"）；纯文字对话不受影响。</>
+      )}
+      {!httpsHint && <> {mediaDiag.fix}</>}
+    </div>
+  )
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="logo">MT</span>
-          <div>
-            <h1>MindTrace</h1>
-            <p>多模态心理陪伴 Agent · LangGraph 骨架</p>
-          </div>
-        </div>
+    <div className={view === 'talk' ? 'app talk-app' : 'app'}>
+      {accountBar(view !== 'pro')}
 
-        <div className="controls">
-          {/* 当前登录用户：只读展示，不再是可随意改的输入框 */}
-          <div className="who">
-            <span className="who-avatar">{(auth.username || '?')[0].toUpperCase()}</span>
-            <div className="who-text">
-              <b>{auth.username || '未知用户'}</b>
-              <span className="muted small">{userId}</span>
-            </div>
-          </div>
-          <button className="btn ghost" onClick={refreshOverview}>刷新</button>
-          <button
-            className="btn ghost"
-            onClick={async () => {
-              const sid = await api.createSession(userId)
-              setSessionId(sid)
-              refreshOverview()
-            }}
-          >
-            新会话
-          </button>
-          <span
-            className="badge"
-            style={{ color: risk.color, background: risk.bg }}
-            title={
-              sessionId
-                ? `当前会话 ${sessionId} 的风险等级。历史未处理事件请见「人工审核台」`
-                : '尚未创建会话。历史未处理事件请见「人工审核台」'
-            }
-          >
-            当前风险：{risk.label}
-          </span>
-          {health && (
-            <span className="badge subtle">
-              LLM: {health.llm_provider} · CKPT: {health.checkpointer}
-            </span>
-          )}
-          <button className="btn ghost" onClick={handleLogout}>登出</button>
-        </div>
-      </header>
+      {view !== 'talk' && mediaNotice}
 
-      {error && <div className="error-bar">接口错误：{error}</div>}
+      {view === 'home' && (
+        <main className="content">
+          <HomeView
+            {...childProps}
+            onNavigate={(t) => (t === 'chat' ? startChat() : setView(t))}
+            onStartTalk={startTalk}
+            onStartChat={startChat}
+          />
+        </main>
+      )}
 
-      <nav className="tabs">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={tab === t.key ? 'tab active' : 'tab'}
-            onClick={() => setTab(t.key)}
-          >
-            {t.label}
-            {t.key === 'review' && overview?.risk_flags?.filter((f) => !f.handled && ['moderate', 'high', 'imminent'].includes(f.level)).length > 0 && (
-              <span className="dot" />
-            )}
-          </button>
-        ))}
-      </nav>
-
-      <main className="content">
-        <Active
-          userId={userId}
-          sessionId={sessionId}
-          ensureSession={ensureSession}
-          overview={overview}
-          refresh={refreshOverview}
-          onRisk={setLiveRisk}
+      {view === 'talk' && (
+        <TalkView
+          {...childProps}
+          kind={talkKind}
+          onExit={onTalkExit}
         />
-      </main>
+      )}
 
-      <footer className="footnote">
-        本系统为技术演示骨架，不提供医疗诊断。紧急情况请拨打
-        {overview?.hotlines?.map((h) => ` ${h.name} ${h.number}`).join(' / ') || ' 12356'}。
-      </footer>
+      {view === 'chat' && (
+        <main className="content">
+          <ChatView {...childProps} initial={chatSeed} />
+        </main>
+      )}
+
+      {view === 'diary' && (
+        <main className="content">
+          <DiaryView userId={userId} onBack={() => setView('home')} />
+        </main>
+      )}
+
+      {view === 'pro' && (
+        <>
+          <nav className="tabs">
+            {PRO_TABS.map((t) => (
+              <button key={t.key}
+                className={tab === t.key ? 'tab active' : 'tab'}
+                onClick={() => setTab(t.key)}>
+                {t.label}
+                {t.key === 'review' && overview?.risk_flags?.filter(
+                  (f) => !f.handled && ['moderate', 'high', 'imminent'].includes(f.level)).length > 0 && (
+                  <span className="dot" />
+                )}
+              </button>
+            ))}
+          </nav>
+          <main className="content">
+            {(() => {
+              const Active = PRO_TABS.find((t) => t.key === tab).comp
+              return <Active {...childProps} />
+            })()}
+          </main>
+        </>
+      )}
+
+      {view !== 'talk' && (
+        <footer className="footnote">
+          本系统为技术演示骨架，不提供医疗诊断。紧急情况请拨打
+          {overview?.hotlines?.map((h) => ` ${h.name} ${h.number}`).join(' / ') || ' 12356'}。
+        </footer>
+      )}
     </div>
   )
 }

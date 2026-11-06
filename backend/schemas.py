@@ -129,3 +129,42 @@ class ProfileUpdate(BaseModel):
     personality_traits: list[str] | None = None
     coping_style: list[str] | None = None
     social_support: list[str] | None = None
+
+
+class RiskRulesPreviewRequest(BaseModel):
+    """风险规则配置：试跑预览请求（P0）。
+
+    - version 为空时用最新草稿；指定则用该版本内容。
+    - include_model=True 时才跑模型通道（慢、可能不可用），默认只跑确定性通道。
+    - 全程不落库、不写画像、不进审核队列。
+    """
+
+    text: str = Field(min_length=1, max_length=1000)
+    version: str | None = None
+    include_model: bool = False
+    scale_item_scores: list[int] | None = None
+
+
+class RiskRulesUploadTextRequest(BaseModel):
+    """风险规则配置：直接粘贴文本上传（不依赖文件对话框）。
+
+    用于 IDE 内置预览浏览器等无法弹出原生文件选择器的环境。
+    fmt 由 content 自动推断，也可用 filename 后缀提示。
+    """
+
+    content: str = Field(min_length=1, max_length=2 * 1024 * 1024)
+    filename: str = "config.json"   # 仅用于判断 csv/json
+    note: str = ""
+
+
+class DiaryGenerateRequest(BaseModel):
+    """会话结束后生成日记 + 心情。
+
+    transcript 可空：为空时后端自动从该 session 的消息里拼接用户原话。
+    """
+
+    user_id: str
+    session_id: str
+    transcript: str = ""
+    emotion_label: str = ""
+    risk_level: str = "none"

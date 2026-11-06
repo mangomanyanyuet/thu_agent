@@ -62,6 +62,13 @@ body {
   padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; font-size: 13px;
 }
 
+.media-notice {
+  background: #fffbeb; border: 1px solid #fcd34d; color: #92400e;
+  padding: 10px 14px; border-radius: 10px; margin-bottom: 12px; font-size: 13px;
+  line-height: 1.7;
+}
+.media-notice a { color: #1d4ed8; text-decoration: underline; font-weight: 600; }
+
 /* ---------- tabs ---------- */
 .tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); margin-bottom: 16px; flex-wrap: wrap; }
 .tab {
@@ -189,6 +196,15 @@ textarea { width: 100%; min-height: 84px; resize: vertical; }
 select { cursor: pointer; }
 .row input { flex: 1; min-width: 160px; }
 .kv select, .kv input[type='number'] { max-width: 190px; padding: 5px 8px; }
+
+/* 原生文件选择：让"选择文件"按钮贴近项目 .btn 风格，避免默认样式太突兀 */
+input[type='file'] { font-size: 12px; max-width: 100%; }
+input[type='file']::file-selector-button {
+  border: 1px solid var(--line); border-radius: 8px; padding: 7px 12px;
+  background: #fff; color: var(--text); cursor: pointer; font-size: 13px;
+  margin-right: 10px; font-family: inherit;
+}
+input[type='file']::file-selector-button:hover { border-color: var(--primary); color: var(--primary); }
 
 /* ---------- 病人模拟（测试用） ---------- */
 .card.sim { border: 1px dashed var(--line); }
@@ -732,5 +748,146 @@ select { cursor: pointer; }
 .crisis-report { border-color: #fca5a5; background: #fef6f6; padding: 22px; }
 .crisis-text { font-size: 15px; line-height: 1.9; white-space: pre-wrap; }
 .watch-card { border-color: #c7d2fe; background: #f5f7ff; }
+
+/* ==================================================================
+   豆包式改版：简洁首页 / 全屏通话 / 日记
+   ================================================================== */
+
+/* 顶部账号条（简洁版） */
+.mini-top {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 4px 6px; margin-bottom: 10px;
+}
+.mini-top .logo { width: 34px; height: 34px; border-radius: 10px; font-size: 13px; }
+
+/* ---------- 首页 HomeView ---------- */
+.home { max-width: 680px; margin: 0 auto; padding: 26px 16px 30px; }
+.home-hero { text-align: center; margin: 30px 0 22px; }
+.home-hero h2 { margin: 0 0 10px; font-size: 30px; font-weight: 700; letter-spacing: .5px; }
+.home-hero p { margin: 0; font-size: 14px; }
+
+.home-modes {
+  display: flex; justify-content: center; gap: 8px; margin: 0 auto 26px;
+  background: #eef0f6; border-radius: 999px; padding: 5px; width: fit-content;
+}
+.mode {
+  border: none; background: transparent; color: var(--muted); cursor: pointer;
+  padding: 8px 30px; border-radius: 999px; font-size: 14px; font-weight: 600;
+}
+.mode.active { background: #fff; color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+
+.home-label { margin-bottom: 8px; }
+.home-suggest { display: flex; flex-direction: column; gap: 8px; margin-bottom: 22px; }
+.suggest {
+  text-align: left; border: 1px solid var(--line); background: #fff;
+  border-radius: 12px; padding: 12px 16px; font-size: 14px; color: var(--text);
+  cursor: pointer; transition: border-color .15s, transform .05s;
+}
+.suggest:hover { border-color: #c7cbd8; }
+.suggest:active { transform: scale(.995); }
+
+.home-actions {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px;
+}
+.act {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  border: 1px solid var(--line); background: #fff; border-radius: 14px;
+  padding: 14px 6px; cursor: pointer; font-size: 12px; color: var(--text);
+  transition: border-color .15s, background .15s;
+}
+.act:hover { border-color: var(--primary); background: #f7f7ff; }
+.act-ic { font-size: 20px; }
+
+.home-composer {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--line); background: #fff; border-radius: 16px;
+  padding: 8px 10px; box-shadow: 0 4px 18px rgba(0,0,0,.05);
+}
+.home-composer .voice { margin-bottom: 0; }
+.home-composer .voice-info { display: none; } /* 首页录音组件只留麦克风按钮 */
+.home-input {
+  flex: 1; border: none; outline: none; font-size: 14px; padding: 6px;
+  color: var(--text); background: transparent;
+}
+.home-composer .btn.primary { border-radius: 12px; }
+
+/* ---------- 全屏通话 TalkView ---------- */
+.talk-app { max-width: 100%; padding: 0; }
+.talk-app .mini-top { padding: 10px 16px; margin: 0; }
+.talk { display: flex; flex-direction: column; min-height: calc(100vh - 56px); }
+.talk-stage {
+  position: relative; flex: 1; min-height: 420px;
+  background: radial-gradient(1200px 500px at 50% 0%, #eef0ff, #f6f7fb 70%);
+  display: grid; place-items: center; overflow: hidden; cursor: pointer;
+}
+.talk-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.talk-top {
+  position: absolute; top: 14px; left: 14px; right: 14px;
+  display: flex; gap: 8px; flex-wrap: wrap; z-index: 3;
+}
+.talk-warn {
+  position: absolute; top: 56px; left: 14px; right: 14px; z-index: 3;
+  background: #fffbeb; border: 1px solid #fcd34d; color: #92400e;
+  padding: 8px 12px; border-radius: 10px; font-size: 12px; line-height: 1.6;
+}
+.talk-hotlines {
+  position: absolute; bottom: 16px; left: 14px; right: 14px; z-index: 3;
+  background: #fef6f6; border: 1px solid #fca5a5; border-radius: 12px;
+  padding: 12px 16px; font-size: 13px;
+}
+.talk-hotlines ul { list-style: none; margin: 8px 0 0; padding: 0; }
+.talk-hotlines li { padding: 3px 0; }
+.talk-hotlines b { color: #b91c1c; }
+
+.talk-avatar { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 60px 20px 150px; }
+.talk-orb {
+  width: 120px; height: 120px; border-radius: 50%;
+  background: radial-gradient(circle at 32% 30%, #a5b4fc, #6366f1 60%, #4338ca);
+  box-shadow: 0 12px 40px rgba(99,102,241,.35); transition: transform .3s;
+}
+.talk-orb[data-state='speaking'] { animation: orb 1.6s ease-in-out infinite; }
+.talk-orb[data-state='recording'] { transform: scale(1.08); box-shadow: 0 12px 46px rgba(239,68,68,.4); background: radial-gradient(circle at 32% 30%, #fca5a5, #ef4444 60%, #b91c1c); }
+.talk-orb[data-state='thinking'] { animation: orb 2.4s ease-in-out infinite; }
+@keyframes orb { 0%,100% { transform: scale(1); } 50% { transform: scale(1.12); } }
+.talk-status { font-size: 15px; color: var(--muted); text-align: center; }
+.talk-bubble {
+  max-width: 560px; padding: 12px 18px; border-radius: 16px; font-size: 14px; line-height: 1.7;
+}
+.talk-bubble.you { background: #eef2ff; color: #3730a3; align-self: flex-end; }
+.talk-bubble.ai { background: #fff; border: 1px solid var(--line); }
+
+.talk-controls {
+  display: flex; align-items: center; justify-content: center; gap: 14px;
+  padding: 20px 16px 8px; flex-wrap: wrap;
+}
+.ctl {
+  width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--line);
+  background: #fff; cursor: pointer; font-size: 18px; display: grid; place-items: center;
+  transition: transform .08s, border-color .15s;
+}
+.ctl:active { transform: scale(.94); }
+.ctl.off { background: #f3f4f6; color: var(--muted); }
+.ctl.main {
+  width: auto; padding: 0 26px; height: 56px; border-radius: 28px;
+  background: var(--primary); color: #fff; border-color: var(--primary); font-size: 15px; font-weight: 600;
+}
+.ctl.main.recording { background: #ef4444; border-color: #ef4444; }
+.ctl.main:disabled { opacity: .5; cursor: not-allowed; }
+.ctl.hang { background: #fef2f2; border-color: #fecaca; color: #dc2626; }
+.talk-app .footnote { display: none; }
+.talk-diary { min-height: 70vh; }
+
+/* ---------- 日记 DiaryView ---------- */
+.diary-page { max-width: 680px; margin: 0 auto; }
+.diary-group { margin-top: 18px; }
+.diary-date { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 8px; }
+.diary-card { margin-bottom: 10px; cursor: pointer; transition: border-color .15s; }
+.diary-card:hover { border-color: #c7cbd8; }
+
+@media (max-width: 560px) {
+  .home-actions { grid-template-columns: repeat(2, 1fr); }
+  .home-hero h2 { font-size: 24px; }
+  .talk-bubble { max-width: 88vw; }
+}
 
 .report-foot { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }

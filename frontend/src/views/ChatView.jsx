@@ -11,7 +11,9 @@ const TONE_SHORT = {
   unknown: '语音',
 }
 
-export default function ChatView({ userId, sessionId, ensureSession, refresh, onRisk }) {
+export default function ChatView({ userId, sessionId, ensureSession, refresh, onRisk, initial }) {
+  const streamingRef = useRef(false) // 流式输出中：禁止历史快照覆盖本地气泡
+  const seededRef = useRef(null)     // 已自动发过的首句 key（StrictMode 下防重复）
   const [messages, setMessages] = useState([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -34,6 +36,7 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
   const loadMessages = useCallback(async (sid) => {
     if (!sid) return
     const rows = await api.messages(sid)
+    if (streamingRef.current) return // 流式输出中，别用历史快照盖掉正在生成的气泡
     setMessages(
       rows.map((r) => ({
         role: r.role,
@@ -48,6 +51,25 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
     loadMessages(sessionId)
   }, [sessionId, loadMessages])
 
+  // 从首页点推荐话题/直接输入进来：历史加载完后自动把首句流式发出。
+  // 统一使用 ensureSession() 返回的 sid，避免会话刚创建时 state 未更新导致加载和发送落在两个 session 上。
+  useEffect(() => {
+    if (!initial?.text) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const sid = await ensureSession()
+        await loadMessages(sid)
+        if (cancelled || seededRef.current === initial.key) return
+        seededRef.current = initial.key
+        await send(initial.text, initial.voice, sid)
+      } catch (e) {
+        if (!cancelled) setErr(String(e.message || e))
+      }
+    })()
+    return () => { cancelled = true }
+  }, [initial?.key])
+
   useEffect(() => {
     // 403 说明后端关掉了病人模拟 —— 这是**可选项**，不开启就不该出现在界面上
     api.simProfiles().then(setSim).catch(() => setSim(null))
@@ -57,11 +79,12 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: 'smooth' })
   }, [messages, live])
 
-  const send = async () => {
-    const text = input.trim()
+  const send = async (overrideText, overrideVoice, overrideSid) => {
+    const text = (overrideText ?? input).trim()
     if (!text || busy) return
-    const sid = await ensureSession()
-    const thisVoice = voice
+    const sid = overrideSid || await ensureSession()
+    const thisVoice = overrideVoice ?? voice
+    streamingRef.current = true
     setBusy(true)
     setInput('')
     setLive(null)
@@ -106,6 +129,7 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
         { role: 'assistant', content: `请求失败：${e.message}` },
       ])
     } finally {
+      streamingRef.current = false
       setBusy(false)
     }
   }
@@ -242,7 +266,7 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
               }
             }}
           />
-          <button className="btn primary" onClick={send} disabled={busy || !input.trim()}>
+          <button className="btn primary" onClick={() => send()} disabled={busy || !input.trim()}>
             {busy ? '思考中…' : '发送'}
           </button>
         </div>

@@ -1,15 +1,18 @@
 """FastAPI 服务入口。"""
 from __future__ import annotations
 
+import csv
+import io
 import json
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile  # noqa: E402
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
-from fastapi.responses import StreamingResponse  # noqa: E402
+from fastapi.responses import JSONResponse, Response, StreamingResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 from pydantic import BaseModel  # noqa: E402
 
@@ -27,6 +30,9 @@ from schemas import (  # noqa: E402
     ScaleSubmitRequest,
     SimRunRequest,
     SimTurnRequest,
+    RiskRulesPreviewRequest,
+    RiskRulesUploadTextRequest,
+    DiaryGenerateRequest,
 )
 
 settings = get_settings()
@@ -267,6 +273,37 @@ def chat_stream(req: ChatRequest):
                                       "X-Accel-Buffering": "no"})
 
 
+# ------------------------------------------------------------------ 日记 / 心情（豆包式改版）
+@app.post(f"{settings.api_prefix}/diary/generate")
+def diary_generate(req: DiaryGenerateRequest):
+    """一次对话结束后生成日记+心情卡片。
+
+    transcript 为空时自动从 session 的消息里拼用户原话。
+    模型不可用时用规则兜底，保证必有产出（红线：不诊断、不美化危机）。
+    """
+    import diary
+    from storage import list_messages
+
+    transcript = (req.transcript or "").strip()
+    if not transcript:
+        rows = list_messages(req.session_id, limit=200)
+        transcript = "\n".join(m.content for m in rows
+                               if getattr(m, "role", "") == "user" and m.content)
+    entry = diary.generate_diary(
+        req.user_id, req.session_id, transcript,
+        emotion_label=req.emotion_label, risk_level=req.risk_level,
+    )
+    return {"diary": entry}
+
+
+@app.get(f"{settings.api_prefix}/diary/{{user_id}}")
+def diary_list(user_id: str, limit: int = 30):
+    """心情时间线：按时间倒序列出用户的日记。"""
+    import diary
+
+    return {"diaries": diary.list_diaries(user_id, limit)}
+
+
 # ================================================================== 病人模拟（测试用）
 def _sim_enabled() -> None:
     """可选项的总开关。关掉后 /api/sim/* 一律 403。
@@ -457,6 +494,239 @@ def handle_flag(flag_id: int, reviewer: str = "human", note: str = ""):
     from storage import mark_risk_handled
     mark_risk_handled(flag_id, reviewer, note)
     return {"ok": True}
+
+
+# ================================================================== 风险规则配置（P0）
+# 让医生「上传规则文件 → 校验护栏 → 存草稿 → 试跑预览 → 发布/回滚」。
+# ⚠ P0 边界：核心对话引擎（perception.py / graph.py）仍读 config.py 默认值，
+#   publish 只做版本标记、不切引擎；P1 再把引擎取值切到 risk_rules.get_active()。
+#   故本组接口可安全体验，不影响线上对话判定。
+def _require_doctor(request: Request) -> dict:
+    """最小角色校验：默认放行所有已登录账号；设置 DOCTOR_USERS 后仅放行白名单。
+
+    P0 演示阶段不做强制 RBAC（见文档 4.3）；生产应在 app_user 加 role 字段。
+    """
+    s = getattr(request.state, "user", None)
+    username = (s or {}).get("username", "") or "anonymous"
+    allowed = os.getenv("DOCTOR_USERS", "").strip()
+    if allowed:
+        white = {x.strip() for x in allowed.split(",") if x.strip()}
+        if username not in white:
+            raise HTTPException(403, f"仅授权医生账号可操作风险规则配置（当前 {username}）")
+    return {"username": username, "user_id": (s or {}).get("user_id", "")}
+
+
+def _cfg_to_csv(cfg: dict) -> str:
+    """把配置的词表导出成 CSV（BOM 头保证 Excel 打开中文不乱码）。"""
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["等级", "关键词"])
+    for k in ("imminent", "high", "moderate", "low", "implicit"):
+        for kw in cfg.get("patterns", {}).get(k, []):
+            w.writerow([k, kw])
+    return "\ufeff" + buf.getvalue()
+
+
+@app.get(f"{settings.api_prefix}/risk-rules")
+def risk_rules_overview(request: Request):
+    """当前生效配置 + 版本历史概览。"""
+    import risk_rules as rr
+
+    _require_doctor(request)
+    active, active_ver = rr.get_active()
+    return {
+        "active_version": active_ver,
+        "active_config": active,
+        "latest_draft": rr.latest_draft_version(),
+        "versions": rr.list_versions(),
+        "engine_wired": False,  # P0：引擎尚未接入，发布仅做版本标记
+    }
+
+
+@app.get(f"{settings.api_prefix}/risk-rules/template")
+def risk_rules_template(request: Request, fmt: str = "csv"):
+    """下载模板：csv=词表模板；json=完整配置模板。"""
+    import risk_rules as rr
+
+    _require_doctor(request)
+    cfg = rr.default_config()
+    if fmt == "json":
+        return JSONResponse(content=cfg, headers={
+            "Content-Disposition": 'attachment; filename="risk_rules_template.json"'})
+    return Response(content=_cfg_to_csv(cfg), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="risk_words_template.csv"'})
+
+
+@app.get(f"{settings.api_prefix}/risk-rules/export")
+def risk_rules_export(request: Request, fmt: str = "json"):
+    """导出当前生效配置，供医生在此基础上修改后再上传。"""
+    import risk_rules as rr
+
+    _require_doctor(request)
+    cfg, ver = rr.get_active()
+    if fmt == "csv":
+        return Response(content=_cfg_to_csv(cfg), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": 'attachment; filename="risk_words_active.csv"'})
+    return JSONResponse(content=cfg, headers={
+        "Content-Disposition": f'attachment; filename="risk_rules_{ver}.json"'})
+
+
+@app.get(f"{settings.api_prefix}/risk-rules/versions")
+def risk_rules_versions(request: Request):
+    import risk_rules as rr
+
+    _require_doctor(request)
+    return {"versions": rr.list_versions()}
+
+
+def _parse_rules_text(text: str, filename: str) -> dict:
+    """把上传/粘贴的文本解析成配置对象，按后缀判断 csv/json。
+
+    csv：以当前生效配置为底，增量合并词表；json：完整替换。
+    解析或校验失败抛 HTTPException(400)。
+    """
+    import risk_rules as rr
+
+    text = (text or "").lstrip("\ufeff")
+    name = (filename or "").lower()
+    looks_json = text.strip().startswith("{")
+    if name.endswith(".csv") and not looks_json:
+        base, _ = rr.get_active()
+        cfg, errs = rr.merge_csv(base, text)
+        if errs:
+            raise HTTPException(400, "；".join(errs))
+    elif name.endswith(".json") or looks_json:
+        try:
+            cfg = json.loads(text)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "JSON 解析失败，请检查格式")
+    else:
+        raise HTTPException(400, "无法识别格式：请用 .csv（等级,关键词）或 .json")
+    return cfg
+
+
+def _commit_draft(cfg: dict, actor: dict, note: str) -> dict:
+    """校验护栏并落草稿，返回统一响应体。"""
+    import risk_rules as rr
+
+    ok, errors, warns = rr.validate_config(cfg)
+    if not ok:
+        raise HTTPException(400, "配置校验未通过：" + "；".join(errors))
+    rec = rr.save_draft(cfg, actor["username"], note, errors, warns)
+    return {"version": rec["version"], "status": rec["status"],
+            "warns": rec["warns"], "created_at": rec["created_at"],
+            "message": "已存为草稿，请用 /preview 试跑后再发布"}
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/upload")
+async def risk_rules_upload(request: Request, file: UploadFile = File(...),
+                            note: str = Form("")):
+    """上传配置文件（multipart）：解析 → 护栏校验 → 存草稿 → 生成版本。不直接生效。"""
+    actor = _require_doctor(request)
+    raw = await file.read()
+    if len(raw) > 2 * 1024 * 1024:
+        raise HTTPException(413, "配置文件过大（上限 2MB）")
+    text = raw.decode("utf-8-sig", errors="replace")
+    cfg = _parse_rules_text(text, file.filename or "")
+    return _commit_draft(cfg, actor, note)
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/upload-text")
+def risk_rules_upload_text(req: RiskRulesUploadTextRequest, request: Request):
+    """直接粘贴文本上传（不依赖文件对话框）。
+
+    用于 IDE 内置预览浏览器等无法弹出原生文件选择器的环境：
+    医生把 CSV/JSON 内容粘进文本框即可，后端走同一套解析与护栏。
+    """
+    actor = _require_doctor(request)
+    cfg = _parse_rules_text(req.content, req.filename)
+    return _commit_draft(cfg, actor, req.note)
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/preview")
+def risk_rules_preview(req: RiskRulesPreviewRequest, request: Request):
+    """边配边试：用草稿/指定版本跑规则+量表（+可选模型）通道，不落库。"""
+    import risk_rules as rr
+
+    _require_doctor(request)
+    if req.version:
+        cfg = rr.get_version(req.version)
+        label = req.version
+        if not cfg:
+            raise HTTPException(404, f"版本不存在：{req.version}")
+    else:
+        dv = rr.latest_draft_version()
+        if dv:
+            cfg, label = rr.get_version(dv), dv
+        else:
+            cfg, label = rr.get_active()
+
+    lvl, hit, bucket = rr.rule_level(cfg, req.text)
+    channels: dict[str, dict] = {
+        "rule": {"level": lvl, "evidence": hit},
+        "model": {"level": 0, "evidence": ""},
+        "multimodal": {"level": 0, "evidence": ""},
+        "scale": {"level": 0, "evidence": ""},
+    }
+    s_lvl, s_ev = rr.scale_level(cfg, req.scale_item_scores)
+    if s_lvl:
+        channels["scale"] = {"level": s_lvl, "evidence": s_ev}
+
+    if req.include_model:
+        try:
+            from graph import RISK_SYS
+            from llm import structured
+            from models import RiskAssessment
+
+            ra: RiskAssessment = structured(RiskAssessment, RISK_SYS, f"用户说：{req.text}")
+            m_lvl = ["none", "low", "moderate", "high", "imminent"].index(ra.level.value)
+            channels["model"] = {"level": m_lvl, "evidence": ra.evidence or ""}
+        except Exception:  # noqa: BLE001  试跑模型失败不影响确定性通道结果
+            channels["model"] = {"level": 0, "evidence": "模型通道不可用（试跑已忽略）"}
+
+    final = max(ch["level"] for ch in channels.values())
+    active_cfg, _ = rr.get_active()
+    a_cml = active_cfg.get("gates", {}).get("crisis_min_level")
+    c_cml = cfg.get("gates", {}).get("crisis_min_level")
+    diff = (f"crisis_min_level {a_cml}→{c_cml}" if a_cml != c_cml else "")
+
+    return {
+        "text": req.text, "config_version": label,
+        "rule_hit": {"pattern": hit, "bucket": bucket, "level": lvl},
+        "channels": channels, "final_level": final,
+        "route": rr.route(cfg, final),
+        "would_interrupt": rr.route(cfg, final) == "crisis",
+        "diff_vs_active": diff,
+    }
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/publish/{{version}}")
+def risk_rules_publish(version: str, request: Request, reason: str = ""):
+    """发布某版本为「生效版本」。
+
+    P0：只做版本标记（engine_wired=False），不改变线上对话判定；P1 接引擎。
+    """
+    import risk_rules as rr
+
+    actor = _require_doctor(request)
+    try:
+        return rr.publish(version, actor["username"], reason)
+    except KeyError:
+        raise HTTPException(404, f"版本不存在：{version}") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/rollback/{{version}}")
+def risk_rules_rollback(version: str, request: Request, reason: str = ""):
+    """回滚到指定历史版本。"""
+    import risk_rules as rr
+
+    actor = _require_doctor(request)
+    try:
+        return rr.rollback(version, actor["username"], reason)
+    except KeyError:
+        raise HTTPException(404, f"版本不存在：{version}") from None
 
 
 # ------------------------------------------------------------------ 每日上报（App 侧）

@@ -184,6 +184,10 @@ tail -f data/traces/agent-$(date +%Y%m%d).jsonl | jq -r .msg   # 实时决策日
 | POST | `/api/asr` | 语音转写 + 声学特征 + 语气 |
 | GET | `/api/sim/profiles` | 病人模拟：可选风格与严重程度 |
 | POST | `/api/sim/turn` \| `/api/sim/run` | 病人模拟：跑一轮 / 连续跑多轮（需 `ENABLE_PATIENT_SIM=1`） |
+| GET | `/api/risk-rules` \| `/params` | 生效配置与版本概览 / 表单元数据与预设 |
+| POST | `/api/risk-rules/visual` \| `/diff` \| `/regression` | 可视化表单存草稿 / 变更对照 / 一键回归 |
+| POST | `/api/risk-rules/preview` \| `/publish/{v}` \| `/rollback/{v}` | 试跑 / 发布生效 / 回滚 |
+| GET/POST | `/api/risk-rules/template` \| `/export` \| `/upload` \| `/upload-text` | 模板、导出与文件/粘贴上传 |
 
 ---
 
@@ -223,6 +227,45 @@ python3 simulate.py --style hostile --severity 4 --seed 42 --json out.json
 ⚠ 模拟数据会**真实写入数据库**（会话 / 消息 / 风险事件 / 画像），默认挂在 `u_sim` 下，
 会话 summary 带 `[SIM]` 标记便于清理。开关为 `ENABLE_PATIENT_SIM`（默认 1，关闭后 `/api/sim/*` 返回 403）；
 即便开启，普通 `/api/chat` 走的仍是真人输入，不受影响。
+
+---
+
+## 临床参数配置（专业心理专家调参）
+
+专业版「**临床参数**」tab 让专家在体验中直接修正「告警太频繁 / 不够敏感」，
+不必改代码、不必重启。
+
+- **入口**：专业版 → 「临床参数」；审核台顶部也有跳转按钮。
+- **流程**：选预设（保守 / 标准 / 敏感）→ 拖表单改阈值 → 保存草稿 →
+  「查看变更对照」+「一键回归试跑」（6 句样例句对比改动前后等级与分流，
+  放宽标红）→ 填变更理由发布 → **下一轮对话立即生效**，可一键回滚。
+- **表单由后端 `risk_rules.PARAM_GROUPS` 元数据生成**：中文标签、临床含义、
+  默认值、允许范围只维护一份。共 6 组 22 个标量字段 + 3 项量表映射 + 5 张可编辑词表；
+  每组标注了作用范围（长期对话 / 5 分钟陪伴会话）。
+  详见 `docs/流程框架梳理与医生体验配置化方案.md` §5.8 / §6.2。
+
+| 典型抱怨 | 该调哪个旋钮 |
+|---|---|
+| 审核队列刷屏 | `flags.min_level` 1→2（只降队列噪音，挂起不受影响） |
+| 一份很久以前的 PHQ-9 让每轮都触发危机 | `scale.max_age_days` 0→30 等（默认 0 = 不限制，与原行为一致） |
+| 面部悲伤 / 掩饰信号误报 | 调高 `multimodal.sad_ratio_threshold`、调低 `sad_ratio_level` / `mask_signal_level`，或关闭 `multimodal.enabled` / `voice.enabled` |
+| 告别式说法挂起过多 | `implicit_level` 调低，或把词从 `implicit` 桶移出 |
+| 中度意念就该人工介入（不够敏感） | `gates.crisis_min_level` 3→2（须同时把 `moderate_level` 调到 1） |
+| 有些隐晦说法判不出来 | 把词加进更高的 `patterns.*` 桶，或调高 `implicit_level` |
+| 模型分级口径需要临床补充 | `assess.prompt_extra`（追加到评估 prompt，基座红线保留；仅长期对话） |
+| 会话收尾太早 / 太晚 | `session.idle_confirm_at` / `idle_end_at` / `wrap_up_at`（仅陪伴会话） |
+
+危机门槛**最高只能是 3**（重度），所以「挂起太频繁」只能靠收紧弱信号、量表有效期和词表来解决，
+不能靠把危机门槛调到 4。
+
+**系统锁定、不可配置**（界面只读列出）：四通道取 max / 风险只升不降、
+重度及以上必挂起等人工并给热线、词桶对应的 C-SSRS 等级、
+危急/重度词表不得删空、PHQ-9 满分至少判重度、规则与模型通道不可关闭。
+服务端护栏在上传**和发布前**各校验一次，配置无法绕过。
+
+⚠ 配置是**全局一份**、写进 SQLite（`risk_rule_version` / `risk_rule_audit`）与
+`data/risk_rules/*.json`；未发布任何版本时回落到代码默认常量。
+角色校验为 `DOCTOR_USERS` 白名单（未设置时放行所有已登录账号，演示用）。
 
 ---
 

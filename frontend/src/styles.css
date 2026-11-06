@@ -213,6 +213,62 @@ input[type='file']::file-selector-button:hover { border-color: var(--primary); c
   font-size: 12px; line-height: 1.9;
 }
 
+/* ---------- 临床参数配置 ---------- */
+.tune-group { border-top: 1px solid var(--line); }
+.tune-group:first-child { border-top: 0; }
+.tune-head {
+  display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+  padding: 10px 2px; cursor: pointer; user-select: none;
+}
+.tune-head:hover { color: var(--primary); }
+.tune-body { padding: 2px 0 12px; }
+.tune-scope {
+  margin-bottom: 9px; padding: 6px 10px; border-radius: 7px;
+  background: #eef2ff; color: #4338ca; line-height: 1.7;
+}
+.tune-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px;
+}
+.tune-field {
+  border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; background: #fff;
+}
+.tune-field.changed { border-color: #f59e0b; background: #fffbeb; }
+.tune-label { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.tune-dot { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; }
+.tune-help { cursor: help; }
+.tune-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 7px; }
+.tune-control select, .tune-control input[type='number'] {
+  min-width: 190px; max-width: 260px; padding: 6px 9px;
+}
+.tune-num { display: flex; align-items: center; gap: 6px; }
+.tune-num input[type='number'] { min-width: 100px; max-width: 130px; }
+.tune-bool { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.tune-text { min-height: 70px; font-size: 12px; }
+.tune-desc { margin-top: 7px; line-height: 1.65; }
+.tune-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 10px; }
+.tune-bucket { border: 1px dashed var(--line); border-radius: 9px; padding: 9px 11px; margin-top: 9px; }
+.tune-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
+.tune-kw {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 12px;
+  background: #f1f5f9; border-radius: 6px; padding: 3px 6px;
+}
+.tune-move { border: 0; background: transparent; padding: 0 2px; font-size: 11px; min-width: 0; }
+.tune-x {
+  border: 0; background: transparent; cursor: pointer; color: #94a3b8;
+  font-size: 14px; line-height: 1; padding: 0 2px;
+}
+.tune-x:hover { color: #dc2626; }
+.tune-locked .tune-body { background: #f8f9fc; border-radius: 8px; padding: 10px; line-height: 1.9; }
+.tune-diff-row, .tune-reg-row, .tune-ver {
+  border-top: 1px solid var(--line); padding: 6px 0; flex-wrap: wrap; gap: 8px;
+}
+.tune-reg-row.relaxed { background: #fef2f2; }
+.tune-ver { font-size: 12px; }
+.tune-warn {
+  margin: 8px 0; padding: 8px 10px; border-radius: 8px;
+  background: #fffbeb; color: #92400e; line-height: 1.8;
+}
+
 /* ---------- profile ---------- */
 .profile {
   background: #f8f9fc; border-radius: 9px; padding: 12px; font-size: 12.5px;

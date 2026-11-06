@@ -18,11 +18,11 @@ from .fusion import (
     text_emotion,
 )
 from .state import (
-    IDLE_CONFIRM_AT,
-    IDLE_END_AT,
     SILENCE_PROMPT,
     Phase,
     SessionState,
+    idle_confirm_at,
+    idle_end_at,
 )
 
 # ------------------------------------------------------------------ 话术（PRD §6.2）
@@ -474,14 +474,14 @@ class CompanionEngine:
         if s.phase in (Phase.CLOSING, Phase.DONE, Phase.CRISIS, Phase.ABORTED):
             return out
 
-        if s.idle_stage >= 1 and gap >= IDLE_END_AT:
+        if s.idle_stage >= 1 and gap >= idle_end_at():
             s.idle_stage = 2
             out["action"] = "end"
             out["prompt"] = self.close_for_idle()
             out["phase"] = s.phase.value
             return out
 
-        if s.idle_stage == 0 and gap >= IDLE_CONFIRM_AT:
+        if s.idle_stage == 0 and gap >= idle_confirm_at():
             s.idle_stage = 1
             out["action"] = "confirm"
             out["prompt"] = IDLE_CONFIRM_TEXT

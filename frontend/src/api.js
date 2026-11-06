@@ -137,6 +137,14 @@ export const api = {
   // ---- 风险规则配置（P0：上传/试跑/发布，医生在审核台操作）----
   riskRulesOverview: () => req('/risk-rules'),
   riskRulesVersions: () => req('/risk-rules/versions'),
+  // ---- 可视化调参（P1）----
+  riskRulesParams: () => req('/risk-rules/params'),
+  riskRulesSaveVisual: (config, note) =>
+    req('/risk-rules/visual', { method: 'POST', body: JSON.stringify({ config, note: note || '' }) }),
+  riskRulesDiff: (payload) =>
+    req('/risk-rules/diff', { method: 'POST', body: JSON.stringify(payload) }),
+  riskRulesRegression: (payload) =>
+    req('/risk-rules/regression', { method: 'POST', body: JSON.stringify(payload || {}) }),
   // 直接粘贴文本上传（文件对话框不可用时的兜底）
   riskRulesUploadText: (content, filename, note) =>
     req('/risk-rules/upload-text', {

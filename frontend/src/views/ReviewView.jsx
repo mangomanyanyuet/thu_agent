@@ -84,10 +84,15 @@ function RiskRulesCard() {
   }
 
   const publish = async (version) => {
+    // P1 起发布会真实改变线上判定：理由是审计必填项，不能用占位文本绕过
+    if (!reason.trim()) {
+      setErr('发布必须填写变更理由（临床依据），会写入审计记录')
+      return
+    }
     setBusy(true); setErr(''); setMsg('')
     try {
-      await api.riskRulesPublish(version, reason || '（未填理由）')
-      setMsg(`已发布版本 ${version}（P0 仅记录标记，尚未接入对话引擎）`)
+      await api.riskRulesPublish(version, reason)
+      setMsg(`已发布版本 ${version}，下一轮对话立即按新参数判定`)
       await reload()
     } catch (e) {
       setErr(String(e.message || e))
@@ -120,9 +125,12 @@ function RiskRulesCard() {
         )}
         {overview && overview.engine_wired === false && (
           <span className="chip" style={{ background: '#fef3c7', color: '#92400e' }}>
-            P0 演示：配置仅供试跑，未接入线上对话
+            配置未接入线上对话
           </span>
         )}
+        <button className="btn ghost" onClick={() => window.dispatchEvent(new CustomEvent('mt:goto-tuning'))}>
+          前往「临床参数」可视化调参 →
+        </button>
         <button className="btn ghost" onClick={() => api.riskRulesDownload('template', 'csv', '词表模板.csv')}>
           下载词表模板
         </button>

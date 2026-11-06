@@ -157,6 +157,34 @@ class RiskRulesUploadTextRequest(BaseModel):
     note: str = ""
 
 
+class RiskRulesVisualRequest(BaseModel):
+    """可视化调参表单：整份配置对象 + 变更理由。
+
+    与上传 JSON 走同一套 normalize / 护栏 / 草稿落库，不另开一条旁路。
+    """
+
+    config: dict
+    note: str = ""
+
+
+class RiskRulesDiffRequest(BaseModel):
+    """发布前的变更清单：草稿可与「当前生效版本」或指定版本对比。"""
+
+    config: dict | None = None
+    version: str | None = None
+    against: str | None = None
+
+
+class RiskRulesRegressionRequest(BaseModel):
+    """回归试跑：用预置样例句对比「生效版本」与「草稿」。"""
+
+    config: dict | None = None
+    version: str | None = None
+    sentences: list[str] | None = None
+    scale_item_scores: list[int] | None = None
+    scale_date: str | None = None
+
+
 class DiaryGenerateRequest(BaseModel):
     """会话结束后生成日记 + 心情。
 

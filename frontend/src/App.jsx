@@ -7,6 +7,7 @@ import DailyView from './views/DailyView.jsx'
 import ScaleView from './views/ScaleView.jsx'
 import ProfileView from './views/ProfileView.jsx'
 import ReviewView from './views/ReviewView.jsx'
+import TuningView from './views/TuningView.jsx'
 import TraceView from './views/TraceView.jsx'
 import EventTraceView from './views/EventTraceView.jsx'
 import HomeView from './views/HomeView.jsx'
@@ -23,6 +24,7 @@ const PRO_TABS = [
   { key: 'scale', label: '量表', comp: ScaleView },
   { key: 'profile', label: '画像与趋势', comp: ProfileView },
   { key: 'review', label: '人工审核台', comp: ReviewView },
+  { key: 'tuning', label: '临床参数', comp: TuningView },
   { key: 'trace', label: '上下文装配', comp: TraceView },
   { key: 'events', label: '决策轨迹', comp: EventTraceView },
 ]
@@ -54,8 +56,13 @@ export default function App() {
 
   useEffect(() => {
     const onUnauth = () => setAuth({ token: '', user_id: '', username: '' })
+    const onGotoTuning = () => { setView('pro'); setTab('tuning') }
     window.addEventListener('mt:unauthorized', onUnauth)
-    return () => window.removeEventListener('mt:unauthorized', onUnauth)
+    window.addEventListener('mt:goto-tuning', onGotoTuning)
+    return () => {
+      window.removeEventListener('mt:unauthorized', onUnauth)
+      window.removeEventListener('mt:goto-tuning', onGotoTuning)
+    }
   }, [])
 
   const refreshOverview = useCallback(async () => {

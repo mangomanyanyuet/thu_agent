@@ -32,6 +32,9 @@ from schemas import (  # noqa: E402
     SimTurnRequest,
     RiskRulesPreviewRequest,
     RiskRulesUploadTextRequest,
+    RiskRulesVisualRequest,
+    RiskRulesDiffRequest,
+    RiskRulesRegressionRequest,
     DiaryGenerateRequest,
 )
 
@@ -496,11 +499,10 @@ def handle_flag(flag_id: int, reviewer: str = "human", note: str = ""):
     return {"ok": True}
 
 
-# ================================================================== 风险规则配置（P0）
-# 让医生「上传规则文件 → 校验护栏 → 存草稿 → 试跑预览 → 发布/回滚」。
-# ⚠ P0 边界：核心对话引擎（perception.py / graph.py）仍读 config.py 默认值，
-#   publish 只做版本标记、不切引擎；P1 再把引擎取值切到 risk_rules.get_active()。
-#   故本组接口可安全体验，不影响线上对话判定。
+# ================================================================== 临床参数配置（P0 + P1）
+# 让医生「可视化调参 / 上传规则 → 校验护栏 → 存草稿 → 试跑与回归 → 发布/回滚」。
+# P1 起核心对话引擎（perception.py / graph.py / companion/*）统一读
+# risk_rules.get_active()，**发布即生效**、可回滚；草稿与试跑不落库、不影响线上。
 def _require_doctor(request: Request) -> dict:
     """最小角色校验：默认放行所有已登录账号；设置 DOCTOR_USERS 后仅放行白名单。
 
@@ -539,7 +541,7 @@ def risk_rules_overview(request: Request):
         "active_config": active,
         "latest_draft": rr.latest_draft_version(),
         "versions": rr.list_versions(),
-        "engine_wired": False,  # P0：引擎尚未接入，发布仅做版本标记
+        "engine_wired": True,  # P1：引擎已接入，发布后下一轮对话立即生效
     }
 
 
@@ -606,9 +608,15 @@ def _parse_rules_text(text: str, filename: str) -> dict:
 
 
 def _commit_draft(cfg: dict, actor: dict, note: str) -> dict:
-    """校验护栏并落草稿，返回统一响应体。"""
+    """校验护栏并落草稿，返回统一响应体。
+
+    先 normalize 再校验：手写 JSON / CSV 往往只带一两个字段（增量修改），
+    直接校验原始对象会因「缺字段」误报；normalize 补齐默认值 + 转换类型后
+    校验的才是引擎真正会读到的那份完整配置。
+    """
     import risk_rules as rr
 
+    cfg = rr.normalize(cfg)
     ok, errors, warns = rr.validate_config(cfg)
     if not ok:
         raise HTTPException(400, "配置校验未通过：" + "；".join(errors))
@@ -661,16 +669,8 @@ def risk_rules_preview(req: RiskRulesPreviewRequest, request: Request):
         else:
             cfg, label = rr.get_active()
 
-    lvl, hit, bucket = rr.rule_level(cfg, req.text)
-    channels: dict[str, dict] = {
-        "rule": {"level": lvl, "evidence": hit},
-        "model": {"level": 0, "evidence": ""},
-        "multimodal": {"level": 0, "evidence": ""},
-        "scale": {"level": 0, "evidence": ""},
-    }
-    s_lvl, s_ev = rr.scale_level(cfg, req.scale_item_scores)
-    if s_lvl:
-        channels["scale"] = {"level": s_lvl, "evidence": s_ev}
+    cfg = rr.normalize(cfg)
+    out = rr.evaluate(cfg, req.text, req.scale_item_scores)
 
     if req.include_model:
         try:
@@ -680,32 +680,139 @@ def risk_rules_preview(req: RiskRulesPreviewRequest, request: Request):
 
             ra: RiskAssessment = structured(RiskAssessment, RISK_SYS, f"用户说：{req.text}")
             m_lvl = ["none", "low", "moderate", "high", "imminent"].index(ra.level.value)
-            channels["model"] = {"level": m_lvl, "evidence": ra.evidence or ""}
+            out["channels"]["model"] = {"level": m_lvl, "evidence": ra.evidence or ""}
+            out["final_level"] = max(x["level"] for x in out["channels"].values())
+            out["route"] = rr.route(cfg, out["final_level"])
+            out["would_interrupt"] = out["route"] == "crisis"
         except Exception:  # noqa: BLE001  试跑模型失败不影响确定性通道结果
-            channels["model"] = {"level": 0, "evidence": "模型通道不可用（试跑已忽略）"}
+            out["channels"]["model"] = {"level": 0, "evidence": "模型通道不可用（试跑已忽略）"}
 
-    final = max(ch["level"] for ch in channels.values())
     active_cfg, _ = rr.get_active()
-    a_cml = active_cfg.get("gates", {}).get("crisis_min_level")
-    c_cml = cfg.get("gates", {}).get("crisis_min_level")
-    diff = (f"crisis_min_level {a_cml}→{c_cml}" if a_cml != c_cml else "")
+    changes = rr.diff(active_cfg, cfg)
+    # 保留 P0 前端卡片读的 diff_vs_active 字符串，新增完整结构化 changes
+    brief = "；".join(f"{d['label']} {d['old']}→{d['new']}" for d in changes[:4])
+    return {"text": req.text, "config_version": label,
+            **out, "changes": changes, "diff_vs_active": brief}
 
+
+@app.get(f"{settings.api_prefix}/risk-rules/params")
+def risk_rules_params(request: Request):
+    """参数元数据：前端表单、中文标签、范围、预设、锁定项全由这里驱动。"""
+    import risk_rules as rr
+
+    _require_doctor(request)
     return {
-        "text": req.text, "config_version": label,
-        "rule_hit": {"pattern": hit, "bucket": bucket, "level": lvl},
-        "channels": channels, "final_level": final,
-        "route": rr.route(cfg, final),
-        "would_interrupt": rr.route(cfg, final) == "crisis",
-        "diff_vs_active": diff,
+        "groups": rr.PARAM_GROUPS,
+        "locked": rr.LOCKED_ITEMS,
+        "samples": rr.SAMPLE_SENTENCES,
+        "presets": {k: {"label": v["label"], "desc": v["desc"], "config": v["config"]}
+                    for k, v in rr.presets().items()},
+        "level_names": ["none", "low", "moderate", "high", "imminent"],
     }
+
+
+def _draft_or(req, rr) -> tuple[dict, str]:
+    """取「要对比/试跑的目标配置」：优先请求体内联，其次指定版本，最后最新草稿。"""
+    if req.config is not None:
+        return rr.normalize(req.config), "（当前编辑）"
+    if req.version:
+        cfg = rr.get_version(req.version)
+        if not cfg:
+            raise HTTPException(404, f"版本不存在：{req.version}")
+        return rr.normalize(cfg), req.version
+    dv = rr.latest_draft_version()
+    if dv:
+        return rr.normalize(rr.get_version(dv) or {}), dv
+    cfg, ver = rr.get_active()
+    return cfg, ver
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/visual")
+def risk_rules_visual(req: RiskRulesVisualRequest, request: Request):
+    """可视化表单保存：整份配置对象 → 同一套护栏 → 落草稿。"""
+    actor = _require_doctor(request)
+    return _commit_draft(req.config, actor, req.note)
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/diff")
+def risk_rules_diff(req: RiskRulesDiffRequest, request: Request):
+    """发布前变更清单：旧值 → 新值；对「放宽」的改动给出警示。"""
+    import risk_rules as rr
+
+    _require_doctor(request)
+    cfg, label = _draft_or(req, rr)
+    if req.against:
+        base = rr.get_version(req.against)
+        if not base:
+            raise HTTPException(404, f"对比版本不存在：{req.against}")
+    else:
+        base, _ = rr.get_active()
+    changes = rr.diff(rr.normalize(base), cfg)
+    ok, errors, warns = rr.validate_config(cfg)
+
+    # 「放宽」类改动单独提示：护栏只拦得住越界，拦不住「合法但更松」的调法。
+    # 发布前把这些摆到眼前，医生才不会只看到一串数字变化。
+    for d in changes:
+        if d["path"] in ("patterns.imminent", "patterns.high", "patterns.moderate") \
+                and d.get("removed"):
+            warns.append(f"{d['label']} 删除了 {len(d['removed'])} 个词（{'、'.join(d['removed'][:5])}），可能漏报")
+        if d["path"] == "gates.crisis_min_level" and d["new"] > d["old"]:
+            warns.append("危机门槛调高，人工挂起会减少，请确认临床可接受")
+        if d["path"] == "scale.max_age_days":
+            # 0 = 不限制（无穷大），不能按数值大小直接比较
+            def _days(x):
+                return float("inf") if not x else x
+            if _days(d["new"]) < _days(d["old"]):
+                warns.append(f"量表有效期缩短为 {d['new']} 天：超过该天数的量表分不再提供保护，"
+                             "用户长期不复测时可能漏报")
+            else:
+                warns.append("量表有效期延长 / 取消，陈旧分数触发的告警会变多")
+        if d["path"] == "flags.min_level" and d["new"] > d["old"]:
+            warns.append("审核队列门槛调高，轻度信号将不再进入人工队列（挂起不受影响）")
+        if d["path"] in ("multimodal.enabled", "voice.enabled") and d["new"] is False:
+            warns.append(f"{d['label']} 已关闭，该通道的风险信号将不再参与判定")
+        if d["path"] == "implicit_level" and d["new"] < d["old"]:
+            warns.append("告别式/隐喻表达起判等级降低，隐晦风险可能漏报")
+    return {"config_version": label, "changes": changes,
+            "valid": ok, "errors": errors, "warns": warns}
+
+
+@app.post(f"{settings.api_prefix}/risk-rules/regression")
+def risk_rules_regression(req: RiskRulesRegressionRequest, request: Request):
+    """一键回归：预置样例句在「生效版本」与「草稿」下分别判定，标出升级/降级。
+
+    只跑确定性通道（规则 + 量表），不调模型、不落库，秒级返回。
+    """
+    import risk_rules as rr
+
+    _require_doctor(request)
+    cfg, label = _draft_or(req, rr)
+    active, active_ver = rr.get_active()
+    texts = [s.strip() for s in (req.sentences or
+             [x["text"] for x in rr.SAMPLE_SENTENCES]) if s.strip()][:30]
+    names = ["none", "low", "moderate", "high", "imminent"]
+    rows = []
+    for t in texts:
+        a = rr.evaluate(active, t, req.scale_item_scores, req.scale_date)
+        b = rr.evaluate(cfg, t, req.scale_item_scores, req.scale_date)
+        rows.append({
+            "text": t,
+            "old": {"level": a["final_level"], "level_name": names[a["final_level"]],
+                    "route": a["route"], "pattern": a["rule_hit"]["pattern"]},
+            "new": {"level": b["final_level"], "level_name": names[b["final_level"]],
+                    "route": b["route"], "pattern": b["rule_hit"]["pattern"]},
+            "delta": b["final_level"] - a["final_level"],
+            "route_changed": a["route"] != b["route"],
+        })
+    # 「改了门槛但等级没动」同样会改变分流，不能只看等级 delta
+    return {"active_version": active_ver, "config_version": label,
+            "changed": sum(1 for r in rows if r["delta"] != 0 or r["route_changed"]),
+            "rows": rows}
 
 
 @app.post(f"{settings.api_prefix}/risk-rules/publish/{{version}}")
 def risk_rules_publish(version: str, request: Request, reason: str = ""):
-    """发布某版本为「生效版本」。
-
-    P0：只做版本标记（engine_wired=False），不改变线上对话判定；P1 接引擎。
-    """
+    """发布某版本为「生效版本」：下一轮真实对话立即按新参数判定。"""
     import risk_rules as rr
 
     actor = _require_doctor(request)
@@ -727,6 +834,9 @@ def risk_rules_rollback(version: str, request: Request, reason: str = ""):
         return rr.rollback(version, actor["username"], reason)
     except KeyError:
         raise HTTPException(404, f"版本不存在：{version}") from None
+    except ValueError as e:
+        # 回滚目标可能是护栏收紧之前存下的老版本，_activate 会再校验一次并拒绝
+        raise HTTPException(400, str(e)) from None
 
 
 # ------------------------------------------------------------------ 每日上报（App 侧）
@@ -752,7 +862,10 @@ def report_daily(req: DailyReportRequest):
             req.voice.tone, req.voice.audio_features, req.narrative)
         if v_lvl > lvl:
             lvl, ev = v_lvl, v_ev
-    if lvl > 0:
+    # 「审核队列最低等级」对所有入队路径一致生效，不只是对话路径
+    import risk_rules as rr
+    min_flag = int((rr.active_config().get("flags", {}) or {}).get("min_level", 1))
+    if lvl > 0 and lvl >= min_flag:
         from models import RiskFlag, now_iso
         level_name = ["none", "low", "moderate", "high", "imminent"][lvl]
         storage.add_risk_flag(RiskFlag(
@@ -787,9 +900,14 @@ def submit_scale(req: ScaleSubmitRequest):
     storage.add_scale_score(sc)
 
     # 量表通道风险硬触发
+    # 与对话侧一样带量表日期：回填一份半年前的 3 分不该立刻刷出告警
     from models import RiskFlag, now_iso
-    lvl, ev = perception.scale_risk_signal(req.scale_name, req.item_scores)
-    if lvl > 0:
+    import risk_rules as rr
+
+    lvl, ev = perception.scale_risk_signal(req.scale_name, req.item_scores,
+                                           scale_date=sc.date)
+    min_flag = int((rr.active_config().get("flags", {}) or {}).get("min_level", 1))
+    if lvl >= min_flag and lvl > 0:
         storage.add_risk_flag(RiskFlag(
             id=None, user_id=req.user_id, session_id="scale", ts=now_iso(),
             source="scale_item", evidence=ev,

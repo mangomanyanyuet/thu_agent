@@ -115,17 +115,29 @@ def chat(req: MiniChatRequest) -> dict[str, Any]:
         # 绝不让小程序端拿到一个裸 500：至少给兜底话术与热线（红线 4）
         import perception
         from graph import safe_fallback_reply
-        from config import RISK_PATTERNS_HIGH, RISK_PATTERNS_IMMINENT, RISK_PATTERNS_MODERATE
 
         text = req.text
-        level = 3 if any(p in text for p in RISK_PATTERNS_IMMINENT + RISK_PATTERNS_HIGH) \
-            else 2 if any(p in text for p in RISK_PATTERNS_MODERATE) else 0
+        # 降级路径也必须用**生效配置**的词表与门槛：原先读 config.py 常量，
+        # 专家在「临床参数」里新增的高危词在这里完全不认（实测判 none、不进危机）。
+        # 但 run_turn 抛异常的原因可能正是配置层本身（如 SQLite 不可用），
+        # 所以配置层再失败时回落到代码常量，兜底话术永远能给出。
+        try:
+            import risk_rules as rr
+
+            level, _ = perception.rule_risk_level(text)
+            crisis = rr.route(rr.active_config(), level) == "crisis"
+        except Exception:  # noqa: BLE001
+            from config import RISK_PATTERNS_HIGH, RISK_PATTERNS_IMMINENT, RISK_PATTERNS_MODERATE
+            level = 3 if any(p in text for p in RISK_PATTERNS_IMMINENT + RISK_PATTERNS_HIGH) \
+                else 2 if any(p in text for p in RISK_PATTERNS_MODERATE) else 0
+            crisis = level >= 3
         return {
             "session_id": sid,
-            "reply": safe_fallback_reply(level),
-            "risk_level": ["none", "low", "moderate", "high", "imminent"][level],
+            # 判为 crisis 时必须给危机级话术，即便门槛被调到 2
+            "reply": safe_fallback_reply(max(level, 3) if crisis else level),
+            "risk_level": ["none", "low", "moderate", "high", "imminent"][min(level, 4)],
             "hotlines": perception.hotlines(),
-            "crisis_mode": level >= 3,
+            "crisis_mode": crisis,
             "degraded": True,
             "error": str(exc),
             "latency_ms": int((time.monotonic() - t0) * 1000),
@@ -151,8 +163,13 @@ def submit_scale(req: ScaleSubmitMini) -> dict[str, Any]:
         raise HTTPException(400, str(e)) from e
     storage.add_scale_score(sc)
 
-    lvl, ev = perception.scale_risk_signal(req.scale_name, req.item_scores)
-    if lvl > 0:
+    # 与 Web 端 /api/scales 保持一致：带量表日期（有效期）+ 应用审核队列门槛
+    import risk_rules as rr
+
+    lvl, ev = perception.scale_risk_signal(req.scale_name, req.item_scores,
+                                           scale_date=sc.date)
+    min_flag = int((rr.active_config().get("flags", {}) or {}).get("min_level", 1))
+    if lvl > 0 and lvl >= min_flag:
         storage.add_risk_flag(RiskFlag(
             id=None, user_id=req.user_id, session_id="scale", ts=now_iso(),
             source="scale_item", evidence=ev,

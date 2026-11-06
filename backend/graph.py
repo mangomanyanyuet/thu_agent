@@ -192,7 +192,8 @@ def risk_detector_node(state: AgentState) -> dict[str, Any]:
         if not last:
             continue
         from perception import scale_risk_signal
-        lvl, ev = scale_risk_signal(name, last.item_scores)
+        # 带上量表日期：过期的分数不再每轮触发危机（有效期可在页面配置）
+        lvl, ev = scale_risk_signal(name, last.item_scores, scale_date=last.date)
         if lvl > scale_lvl:
             scale_lvl = lvl
             scale_ev = f"{ev}（{last.date}）" if ev else ""
@@ -208,8 +209,15 @@ def risk_detector_node(state: AgentState) -> dict[str, Any]:
             mm_lvl, mm_ev = multimodal_risk_signal(rec)
             break
     if state.get("modality_inconsistent"):
-        mm_lvl = max(mm_lvl, 1)
-        mm_ev = (mm_ev + "；" if mm_ev else "") + "模态不一致（掩饰倾向）"
+        # 该标记来自每日记录，属「每日多模态」通道：
+        # 必须受同一个开关与「模态不一致信号等级」约束，否则界面上关掉通道 /
+        # 调低等级后这里仍按硬编码 1 级出信号
+        import risk_rules as rr
+
+        mm_cfg = rr.active_config().get("multimodal", {}) or {}
+        if mm_cfg.get("enabled", True):
+            mm_lvl = max(mm_lvl, int(mm_cfg.get("inconsistency_level", 1)))
+            mm_ev = (mm_ev + "；" if mm_ev else "") + "模态不一致（掩饰倾向）"
 
     # 本轮语音：语气与文本内容不一致，或语气明显低落，都是独立的风险信号
     # （用 text 而非 emotion —— emotion 在并行分支上，这里读不到）
@@ -250,8 +258,13 @@ def context_builder_node(state: AgentState) -> dict[str, Any]:
     convo = "对话：\n" + "\n".join(f"{m['role']}: {m['content']}" for m in msgs)
 
     # 一次调用同时做情绪评估 + 风险判定（省一轮推理；解耦的是"生成"而非"评估"）
+    # 追加临床补充说明：只 append、不替换基座 prompt，红线不会被写掉。
+    import risk_rules as rr
+
+    extra = (rr.active_config().get("assess", {}) or {}).get("prompt_extra", "")
+    assess_sys = ASSESS_SYS + (f"\n\n【临床补充判定说明】\n{extra}" if extra.strip() else "")
     a: TurnAssessment = structured(
-        TurnAssessment, ASSESS_SYS,
+        TurnAssessment, assess_sys,
         f"{convo}\n\n用户最新一句话：{_last_user_text(state)}"
         f"\n\n近期上下文摘要：{state.get('rolling_summary', '')[:300]}",
     )
@@ -292,16 +305,16 @@ def context_builder_node(state: AgentState) -> dict[str, Any]:
 
 
 def risk_gate(state: AgentState) -> str:
-    """条件边：按最终等级分流。等级取所有通道最大值。"""
+    """条件边：按最终等级分流。等级取所有通道最大值。
+
+    P1：门槛读**生效配置**，与 /risk-rules/preview 共用 `risk_rules.route()`。
+    专家在页面上把「危机触发等级」从 3 调到 2，这里下一轮就会生效。
+    """
     import tracer
+    import risk_rules as rr
 
     level = final_level(state)
-    if level >= 3:
-        dst = "crisis"
-    elif level == 2:
-        dst = "moderate"
-    else:
-        dst = "cbt"
+    dst = rr.route(rr.active_config(), level)
 
     tracer.transition(
         state["session_id"], state.get("turn", -1), "persist_flags", dst,
@@ -389,7 +402,12 @@ def persist_risk_flags(state: AgentState) -> dict[str, Any]:
                   "themes": state.get("emotion", {}).get("themes", [])},
         ))
 
-    if level <= 0:
+    # 队列门槛只影响「待处理风险队列」的噪音，不影响分流与挂起。
+    # 高危会话由 risk_gate / interrupt 独立保证，永远不会被这里过滤掉。
+    import risk_rules as rr
+
+    min_flag = int((rr.active_config().get("flags", {}) or {}).get("min_level", 1))
+    if level <= 0 or level < min_flag:
         return {"assembled_system": system, "context_stats": stats,
                 "_persisted_turn": turn_key, "_traced_turn": _trace_key}
 
@@ -501,7 +519,10 @@ def crisis_node(state: AgentState) -> dict[str, Any]:
     # 之后，末句哪怕是"我今天吃了苹果"，本轮 final_level 仍是 high，
     # 却会拿到一句"谢谢你愿意跟我说这些"（实测复现）。
     if using_mock() or not reply or was_degraded():
-        reply = safe_fallback_reply(final_level(state))
+        # 生效配置允许「危机触发等级=2」时，这里仍必须给**危机级**兜底话术；
+        # 直接传 final_level(=2) 会拿到中度分支的「我想先确认一下你现在安全吗」，
+        # 在已进入 crisis 的会话里等于降级干预。
+        reply = safe_fallback_reply(max(final_level(state), 3))
 
     return {
         "reply": reply,

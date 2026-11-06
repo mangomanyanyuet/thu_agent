@@ -20,6 +20,14 @@ from config import (
 from models import DailyRecord, DailySummary, ScaleScore
 from storage import list_scale_scores
 
+# P1：所有风险阈值改从「生效版本」读。cfg 参数保留给试跑用 ——
+# 引擎传 None 读生效版本，/risk-rules/* 传草稿版本，两边共用同一份判定函数。
+import risk_rules as _rr
+
+
+def _cfg(cfg: dict | None) -> dict:
+    return cfg if cfg is not None else _rr.active_config()
+
 # ------------------------------------------------------------------ 量表定义
 SCALES: dict[str, dict[str, Any]] = {
     "PHQ-9": {
@@ -94,20 +102,28 @@ def score_scale(user_id: str, scale_name: str, item_scores: list[int],
     )
 
 
-def scale_risk_signal(scale_name: str, item_scores: list[int]) -> tuple[int, str]:
+def scale_risk_signal(scale_name: str, item_scores: list[int],
+                      cfg: dict | None = None,
+                      scale_date: str | None = None) -> tuple[int, str]:
     """量表通道的风险信号：返回 (等级数值, 证据)。
 
-    这是"三通道并集召回"里的量表通道，规则硬编码、零漏报。
+    `scale_date` 配合 `scale.max_age_days` 使用：过期的分数不再参与判定。
+    一份半年前第 9 题=3 的 PHQ-9 会让**每一轮**都触发危机挂起，
+    这是专家体验时最容易撞见的「无缘无故反复告警」。
     """
-    if scale_name == "PHQ-9" and len(item_scores) > PHQ9_SUICIDE_ITEM_INDEX:
-        v = item_scores[PHQ9_SUICIDE_ITEM_INDEX]
-        if v >= 3:
-            return 3, f"PHQ-9 第9题得分 {v}（几乎每天有自伤/自杀念头）"
-        if v == 2:
-            return 2, f"PHQ-9 第9题得分 {v}（超过一半天数有相关念头）"
-        if v == 1:
-            return 1, f"PHQ-9 第9题得分 {v}（有几天出现相关念头）"
-    return 0, ""
+    if scale_name != "PHQ-9":
+        return 0, ""
+    c = _cfg(cfg)
+    lvl, ev = _rr.scale_level(c, item_scores, scale_date)
+    if not lvl:
+        return 0, ""
+    idx = int(c.get("scale", {}).get("PHQ9_SUICIDE_ITEM_INDEX", 8))
+    if idx >= len(item_scores):
+        return 0, ""
+    v = item_scores[idx]
+    freq = {3: "几乎每天有自伤/自杀念头", 2: "超过一半天数有相关念头",
+            1: "有几天出现相关念头"}.get(v, "")
+    return lvl, f"{ev}（{freq}）" if freq else ev
 
 
 # ------------------------------------------------------------------ 多模态特征
@@ -257,31 +273,18 @@ def build_daily_record(user_id: str, day: str, video_uri: str,
 
 
 # ------------------------------------------------------------------ 规则风险引擎
-def rule_risk_level(text: str) -> tuple[int, str]:
+def rule_risk_level(text: str, cfg: dict | None = None) -> tuple[int, str]:
     """规则通道：返回 (等级数值 0-4, 命中证据)。零漏报底线。
 
     ⚠ 曾经漏掉 `RISK_PATTERNS_IMPLICIT`（告别式/托付式表达），导致
     "以后不用管我了""帮我把东西转交"这类**只能靠模型通道兜底**——
     而模型通道在关闭思考模式时会判 none，形成双层漏报。
-    这类表达是 PRD 补齐 §7.5.1 明确的 high 判定依据，规则通道必须兜住。
-    """
-    from config import (
-        RISK_PATTERNS_HIGH,
-        RISK_PATTERNS_IMMINENT,
-        RISK_PATTERNS_IMPLICIT,
-        RISK_PATTERNS_LOW,
-        RISK_PATTERNS_MODERATE,
-    )
 
-    for pats, lvl in ((RISK_PATTERNS_IMMINENT, 4), (RISK_PATTERNS_HIGH, 3),
-                      (RISK_PATTERNS_MODERATE, 2), (RISK_PATTERNS_LOW, 1),
-                      # 告别式/隐喻：弱信号，按 moderate 起判（与选型报告 §8.3 一致），
-                      # 由模型通道决定是否升级到 high
-                      (RISK_PATTERNS_IMPLICIT, 2)):
-        for p in pats:
-            if p in text:
-                return lvl, p
-    return 0, ""
+    P1：直接复用 `risk_rules.rule_level`，保证「页面试跑」与「真实对话」
+    不会各写一份、悄悄跑偏。cfg=None 时读生效版本。
+    """
+    lvl, hit, _ = _rr.rule_level(_cfg(cfg), text or "")
+    return lvl, hit
 
 
 def _slow_speech(audio_features: dict[str, Any]) -> bool:
@@ -305,26 +308,33 @@ def _slow_speech(audio_features: dict[str, Any]) -> bool:
     return False
 
 
-def multimodal_risk_signal(record: DailyRecord | None) -> tuple[int, str]:
-    """多模态通道：从当日记录里找风险信号。"""
+def multimodal_risk_signal(record: DailyRecord | None,
+                           cfg: dict | None = None) -> tuple[int, str]:
+    """多模态通道：从当日记录里找风险信号。阈值全部来自生效配置。"""
     if not record:
+        return 0, ""
+    c = _cfg(cfg)
+    mm = c.get("multimodal", {}) or {}
+    if not mm.get("enabled", True):
         return 0, ""
     na = record.narrative_analysis or {}
     emo = (record.video_features or {}).get("emotion_dist", {})
     sp = record.audio_features or {}
     signals = []
     level = 0
-    if na.get("tone") == "negative" and na.get("neg_hits", 0) >= 4:
+    neg_min = int(mm.get("negative_words_min", 4))
+    if na.get("tone") == "negative" and na.get("neg_hits", 0) >= neg_min:
         level = max(level, 1)
         signals.append(f"自述负面词密集({na['neg_hits']})")
     if na.get("insomnia") and _slow_speech(sp):
         level = max(level, 1)
         signals.append("失眠 + 语速显著下降")
-    if emo.get("sad", 0) > 0.6:
-        level = max(level, 2)
-        signals.append(f"面部悲伤占比 {emo['sad']}")
+    sad_thr = float(mm.get("sad_ratio_threshold", 0.6))
+    if emo.get("sad", 0) > sad_thr:
+        level = max(level, int(mm.get("sad_ratio_level", 2)))
+        signals.append(f"面部悲伤占比 {emo['sad']} > {sad_thr}")
     if record.inconsistency:
-        level = max(level, 1)
+        level = max(level, int(mm.get("inconsistency_level", 1)))
         signals.append("自述与表情/语音不一致（可能存在掩饰）")
     return level, "；".join(signals)
 
@@ -347,15 +357,22 @@ def text_tone_of(text: str) -> str:
 
 
 def voice_risk_signal(tone: str, audio_features: dict[str, Any],
-                      text: str = "") -> tuple[int, str]:
+                      text: str = "", cfg: dict | None = None) -> tuple[int, str]:
     """本轮语音的声学风险信号（多模态通道的一部分）。
 
     三条规则（对应报告 §6.3「模态不一致本身是强信号」）：
     1. 语气低落 + 文本负面 → 互相印证，1 级。
-    2. 语气低落 + 文本却说"挺好的" → **掩饰信号**，临床更需警惕，2 级。
+    2. 语气低落 + 文本却说"挺好的" → **掩饰信号**，临床更需警惕，等级可配。
     3. 语气低落 + 文本中性 → 1 级。
     """
     if not tone or tone == "unknown":
+        return 0, ""
+    c = _cfg(cfg)
+    v = c.get("voice", {}) or {}
+    mm = c.get("multimodal", {}) or {}
+    # 只看 voice.enabled：界面上「每日多模态」与「本轮语音」是两个独立开关，
+    # 关掉每日多模态不应连带关掉本轮语音（陪伴会话也依赖本通道）。
+    if not v.get("enabled", True):
         return 0, ""
 
     feats = audio_features or {}
@@ -365,18 +382,18 @@ def voice_risk_signal(tone: str, audio_features: dict[str, Any],
 
     detail: list[str] = []
     if tone in ("low", "flat"):
-        if f0_std is not None and f0_std < 15:
+        if f0_std is not None and f0_std < float(v.get("f0_std_flat", 15)):
             detail.append(f"语调平板(F0标准差{f0_std}Hz)")
-        if rate is not None and rate < 3.0:
+        if rate is not None and rate < float(v.get("rate_slow", 3.0)):
             detail.append(f"语速偏慢({rate}音节/秒)")
-        if pause is not None and pause > 0.55:
+        if pause is not None and pause > float(v.get("pause_high", 0.55)):
             detail.append(f"停顿占比高({pause:.0%})")
         head = "语音呈低落抑制特征" if tone == "low" else "语音偏平淡"
         signal = head + "：" + "、".join(detail or ["多指标偏低"])
     elif tone == "agitated":
-        if rate is not None and rate > 6.5:
+        if rate is not None and rate > float(v.get("rate_fast", 6.5)):
             detail.append(f"语速偏快({rate}音节/秒)")
-        if f0_std is not None and f0_std > 45:
+        if f0_std is not None and f0_std > float(v.get("f0_std_high", 45)):
             detail.append(f"基频起伏大(F0标准差{f0_std}Hz)")
         signal = "语音呈激动/焦虑特征：" + "、".join(detail or ["唤醒度偏高"])
     else:
@@ -385,7 +402,7 @@ def voice_risk_signal(tone: str, audio_features: dict[str, Any],
     text_tone = text_tone_of(text)
     if tone in ("low", "flat") and text_tone == "positive":
         # 嘴上说好、声音低落 —— 掩饰信号，比单纯负面更需要关注
-        return 2, signal + "；但自述偏正面，存在掩饰倾向"
+        return int(mm.get("mask_signal_level", 2)), signal + "；但自述偏正面，存在掩饰倾向"
     if text_tone == "negative":
         return 1, signal + "；与自述负面情绪一致"
     return 1, signal

@@ -27,6 +27,28 @@ IDLE_END_AT = 90            # 上一步后再等 30s 仍无回应：进入结束
 MIN_TURNS = 3               # 主体建议轮次（仅用于报告完整性提示，非终止条件）
 
 
+# P1：上面这组常量是「代码默认值」，运行时以临床参数配置的**生效版本**为准。
+# 软依赖 risk_rules：单独 import companion 做单元测试时也要能跑。
+def session_cfg() -> dict:
+    try:
+        import risk_rules
+        return risk_rules.active_config().get("session", {}) or {}
+    except Exception:  # noqa: BLE001  配置层不可用不能让会话崩掉
+        return {}
+
+
+def wrap_up_at() -> int:
+    return int(session_cfg().get("wrap_up_at", WRAP_UP_AT))
+
+
+def idle_confirm_at() -> int:
+    return int(session_cfg().get("idle_confirm_at", IDLE_CONFIRM_AT))
+
+
+def idle_end_at() -> int:
+    return int(session_cfg().get("idle_end_at", IDLE_END_AT))
+
+
 class Phase(str, Enum):
     CONSENT = "consent"
     QUALITY = "quality"
@@ -90,7 +112,7 @@ class SessionState:
 
         轮次**不再**参与判断：只由时长决定，避免"聊到第 4 轮就被掐断"。
         """
-        return self.elapsed >= WRAP_UP_AT
+        return self.elapsed >= wrap_up_at()
 
     def is_hard_limit(self) -> bool:
         return self.elapsed >= HARD_LIMIT
@@ -102,7 +124,7 @@ class SessionState:
 
         # 时间到了 -> 收尾。轮次不再触发收尾（见 should_wrap_up 说明）。
         if self.phase in (Phase.OPENING, Phase.MAIN):
-            if self.elapsed >= WRAP_UP_AT:
+            if self.elapsed >= wrap_up_at():
                 return Phase.CLOSING
             return Phase.MAIN
         if self.phase == Phase.CLOSING:

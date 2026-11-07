@@ -1,15 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, streamChat } from '../api.js'
 import { EMOTION_META, RISK_META, STAGE_LABEL } from '../theme.js'
-import VoiceRecorder from '../VoiceRecorder.jsx'
-
-const TONE_SHORT = {
-  low: '语气低落',
-  flat: '语气平淡',
-  neutral: '语气平稳',
-  agitated: '语气激动',
-  unknown: '语音',
-}
 
 export default function ChatView({ userId, sessionId, ensureSession, refresh, onRisk, initial }) {
   const streamingRef = useRef(false) // 流式输出中：禁止历史快照覆盖本地气泡
@@ -20,8 +11,6 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
   const [live, setLive] = useState(null) // 本轮的风险/情绪元数据
   const [pending, setPending] = useState(null) // 待人工审核
   const [reviewText, setReviewText] = useState('')
-  const [voice, setVoice] = useState(null) // 本轮语音感知结果
-  const [voiceKey, setVoiceKey] = useState(0) // 用于发送后重置录音组件
   const [err, setErr] = useState('')
   const listRef = useRef(null)
 
@@ -83,14 +72,14 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
     const text = (overrideText ?? input).trim()
     if (!text || busy) return
     const sid = overrideSid || await ensureSession()
-    const thisVoice = overrideVoice ?? voice
+    const thisVoice = overrideVoice ?? null // 兼容旧入口；文字版不产生语音特征
     streamingRef.current = true
     setBusy(true)
     setInput('')
     setLive(null)
     setPending(null)
     setErr('')
-    setMessages((m) => [...m, { role: 'user', content: text, voice: thisVoice }])
+    setMessages((m) => [...m, { role: 'user', content: text }])
 
     let reply = ''
     setMessages((m) => [...m, { role: 'assistant', content: '', streaming: true }])
@@ -118,8 +107,6 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
             next[next.length - 1] = { ...next[next.length - 1], streaming: false }
             return next
           })
-          setVoice(null)
-          setVoiceKey((k) => k + 1) // 重置录音组件
           refresh?.()
         },
       })
@@ -170,20 +157,6 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
     }
   }
 
-  const onVoiceResult = useCallback((r) => {
-    setErr('')
-    setVoice({
-      audio_features: r.audio_features || {},
-      tone: r.tone || '',
-      tone_reason: r.tone_reason || '',
-      summary: r.summary || '',
-    })
-    // 转写文本填入输入框，用户可编辑后再发送
-    if (r.text) setInput((old) => (old ? `${old} ${r.text}` : r.text))
-  }, [])
-
-  const onVoiceError = useCallback((msg) => setErr(msg), [])
-
   const submitReview = async (action) => {
     const sid = await ensureSession()
     const res = await api.submitReview({
@@ -227,14 +200,6 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
               </div>
               {m.role === 'user' && (
                 <div className="msg-meta">
-                  {m.voice && (
-                    <span title={m.voice.summary}>
-                      🎙 {TONE_SHORT[m.voice.tone] || '语音'}
-                      {m.voice.audio_features?.syllable_rate
-                        ? ` · ${m.voice.audio_features.syllable_rate}音节/秒`
-                        : ''}
-                    </span>
-                  )}
                   {m.emotion && EMOTION_META[m.emotion] && (
                     <span>{EMOTION_META[m.emotion].emoji} {EMOTION_META[m.emotion].label}</span>
                   )}
@@ -250,14 +215,9 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
         </div>
 
         <div className="composer">
-          <VoiceRecorder
-            key={voiceKey}
-            onResult={onVoiceResult}
-            onError={onVoiceError}
-          />
           <textarea
             value={input}
-            placeholder="说话或打字…（Enter 发送，Shift+Enter 换行）"
+            placeholder="输入你想说的话…（Enter 发送，Shift+Enter 换行）"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
@@ -271,12 +231,6 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
           </button>
         </div>
         {err && <div className="voice-err">{err}</div>}
-        {voice && (
-          <div className="voice-attached">
-            🎙 本轮将附带语音特征（{voice.tone || '未知语气'}）一起提交
-            <button className="btn tiny ghost" onClick={() => setVoice(null)}>移除</button>
-          </div>
-        )}
       </section>
 
       <aside className="side">

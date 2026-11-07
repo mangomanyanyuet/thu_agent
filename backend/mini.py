@@ -220,6 +220,8 @@ def audio_formats() -> dict[str, Any]:
     `wx.getRecorderManager()` 只输出 mp3 / aac / pcm，不产出 Web 端的 webm/opus。
     pcm 体积过大（16k/16bit/单声道 ≈ 32KB/s），5 分钟约 9MB，不推荐走公网上传。
     """
+    import asr
+
     return {
         "recommended": {
             "format": "mp3",
@@ -230,7 +232,8 @@ def audio_formats() -> dict[str, Any]:
             "maxDurationSec": 120,
         },
         "supported_decode": ["mp3", "aac", "wav", "webm", "ogg", "m4a", "flac"],
-        "asr_model": "faster-whisper small",
+        "asr_model": (f"faster-whisper {asr.ASR_MODEL_SIZE}"
+                      if asr.ASR_ENABLED else "disabled"),
         "note": "解码走 PyAV，不依赖系统 ffmpeg；ASR 不可用时仍返回声学特征与语气。",
     }
 

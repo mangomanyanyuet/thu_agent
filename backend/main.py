@@ -417,14 +417,17 @@ def asr_status():
     import asr
     ready = asr.model_ready()
     hint = ""
-    if not asr.asr_available():
+    if not asr.ASR_ENABLED:
+        hint = "语音转写已关闭（ASR_ENABLED=0）；文字对话与声学特征不受影响"
+    elif not asr.asr_available():
         hint = "未安装 faster-whisper：pip install faster-whisper"
     elif not ready:
-        hint = ("模型未就绪，首次转写需联网下载（约 460MB）。若无法访问 "
+        hint = (f"模型 {asr.ASR_MODEL_SIZE} 未就绪，首次转写需联网下载（约 "
+                f"{asr.ASR_MODEL_SIZE_MB[asr.ASR_MODEL_SIZE]}MB）。若无法访问 "
                 "huggingface.co，可设 HF_ENDPOINT=https://hf-mirror.com 与 "
                 "HF_HUB_DISABLE_XET=1 后重启后端")
     return {"available": asr.asr_available(), "model_ready": ready,
-            "model": asr.ASR_MODEL_SIZE, "hint": hint}
+            "enabled": asr.ASR_ENABLED, "model": asr.ASR_MODEL_SIZE, "hint": hint}
 
 
 @app.post(f"{settings.api_prefix}/asr")

@@ -11,12 +11,11 @@ import TuningView from './views/TuningView.jsx'
 import TraceView from './views/TraceView.jsx'
 import EventTraceView from './views/EventTraceView.jsx'
 import HomeView from './views/HomeView.jsx'
-import TalkView from './views/TalkView.jsx'
 import DiaryView from './views/DiaryView.jsx'
 import { RISK_META } from './theme.js'
 import { mediaDiagnosis } from './env.js'
 
-// 专业版（原有能力）保留为一层，豆包式首页为默认入口
+// 专业版（原有能力）保留为一层，纯文字首页为默认入口
 const PRO_TABS = [
   { key: 'companion', label: '视频语音陪伴', comp: CompanionView },
   { key: 'chat', label: '对话', comp: ChatView },
@@ -31,9 +30,8 @@ const PRO_TABS = [
 
 export default function App() {
   const [auth, setAuth] = useState(() => session.get())
-  const [view, setView] = useState('home')   // home | talk | chat | diary | pro
-  const [talkKind, setTalkKind] = useState('voice')
-  const [chatSeed, setChatSeed] = useState(null) // 从首页带进文字对话的首句 {text, voice, key}
+  const [view, setView] = useState('home')   // home | chat | diary | pro
+  const [chatSeed, setChatSeed] = useState(null) // 从首页带进文字对话的首句 {text, key}
   const [tab, setTab] = useState('companion') // 专业版内部 tab
   const [sessionId, setSessionId] = useState(localStorage.getItem('mt_sid') || '')
   const [overview, setOverview] = useState(null)
@@ -91,11 +89,6 @@ export default function App() {
     return creatingRef.current
   }, [sessionId, userId, refreshOverview])
 
-  const newSession = useCallback(async () => {
-    const { session_id: sid } = await api.createSession(userId)
-    setSessionId(sid); refreshOverview(); return sid
-  }, [userId, refreshOverview])
-
   const handleLogout = async () => {
     try { await api.logout() } catch { /* ignore */ }
     session.clear(); localStorage.removeItem('mt_sid')
@@ -103,16 +96,6 @@ export default function App() {
     setAuth({ token: '', user_id: '', username: '' })
     setView('home'); setTab('companion')
   }
-
-  // 通话结束后回到首页/日记：开一个新会话，让下次通话是干净的
-  const onTalkExit = useCallback(async (target) => {
-    try { await newSession() } catch { /* ignore */ }
-    setView(target === 'diary' ? 'diary' : 'home')
-  }, [newSession])
-
-  const startTalk = useCallback((kind) => {
-    setTalkKind(kind); setView('talk')
-  }, [])
 
   // 首页首句直达文字对话：只切视图，发送与流式回复由 ChatView 负责
   const startChat = useCallback((seed) => {
@@ -164,9 +147,10 @@ export default function App() {
     </div>
   )
 
+  // 语音/视频提示只对专业版的陪伴页有意义；简洁版已是纯文字
   const mediaNotice = !mediaDiag.ok && (
     <div className="media-notice">
-      <b>⚠ 语音与视频不可用</b>：{mediaDiag.reason}。
+      <b>⚠ 专业版语音与视频不可用</b>：{mediaDiag.reason}。
       {httpsHint && (
         <> 请用 HTTPS 打开：<a href={httpsHint} target="_blank" rel="noreferrer">{httpsHint}</a>
           （证书自签，提示"不安全"时选"继续访问"）；纯文字对话不受影响。</>
@@ -176,28 +160,19 @@ export default function App() {
   )
 
   return (
-    <div className={view === 'talk' ? 'app talk-app' : 'app'}>
+    <div className="app">
       {accountBar(view !== 'pro')}
 
-      {view !== 'talk' && mediaNotice}
+      {view === 'pro' && mediaNotice}
 
       {view === 'home' && (
         <main className="content">
           <HomeView
             {...childProps}
             onNavigate={(t) => (t === 'chat' ? startChat() : setView(t))}
-            onStartTalk={startTalk}
             onStartChat={startChat}
           />
         </main>
-      )}
-
-      {view === 'talk' && (
-        <TalkView
-          {...childProps}
-          kind={talkKind}
-          onExit={onTalkExit}
-        />
       )}
 
       {view === 'chat' && (
@@ -236,12 +211,10 @@ export default function App() {
         </>
       )}
 
-      {view !== 'talk' && (
-        <footer className="footnote">
-          本系统为技术演示骨架，不提供医疗诊断。紧急情况请拨打
-          {overview?.hotlines?.map((h) => ` ${h.name} ${h.number}`).join(' / ') || ' 12356'}。
-        </footer>
-      )}
+      <footer className="footnote">
+        本系统为技术演示骨架，不提供医疗诊断。紧急情况请拨打
+        {overview?.hotlines?.map((h) => ` ${h.name} ${h.number}`).join(' / ') || ' 12356'}。
+      </footer>
     </div>
   )
 }

@@ -73,6 +73,14 @@ class Settings(BaseSettings):
     # 本地推理无平台限流，留极小间隔即可
     vllm_min_interval: float = float(os.getenv("VLLM_MIN_INTERVAL", "0.2"))
 
+    # ---- 语音识别（默认关闭，小内存部署用纯文字输入）----
+    # 关掉后不加载 Whisper 权重：/api/asr 仍返回声学特征与语气，但不出转写文本，
+    # 依赖转写文本的语音通话因此不可用（文字对话不受影响）。
+    # 要恢复语音：设 ASR_ENABLED=1，并把前端通话页接回路由。
+    asr_enabled: bool = os.getenv("ASR_ENABLED", "0").lower() in ("1", "true", "yes")
+    # tiny / base / small：int8 权重约 75MB / 145MB / 460MB，越小中文识别率越低
+    asr_model_size: str = os.getenv("ASR_MODEL_SIZE", "small")
+
     # ---- 账号体系（演示级，见 auth.py 顶部的安全说明）----
     # 是否要求登录才能访问 /api/*（关闭则退回"客户端自报 user_id"的 demo 模式）
     require_auth: bool = os.getenv("REQUIRE_AUTH", "1").lower() in ("1", "true", "yes")

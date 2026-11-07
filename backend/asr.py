@@ -16,18 +16,29 @@ from typing import Any
 
 import numpy as np
 
+from config import get_settings
 from models import AudioFeatures
 
 # ------------------------------------------------------------------ 配置
 SAMPLE_RATE = 16000
 
 # 中文场景下 small 是精度/速度的平衡点；tiny/base 对中文识别率明显偏低。
-ASR_MODEL_SIZE = "small"
+# 小内存部署可用 ASR_MODEL_SIZE=base/tiny 换内存，或 ASR_ENABLED=0 彻底不加载权重。
+_s = get_settings()
+ASR_ENABLED = _s.asr_enabled
+ASR_MODEL_REPOS = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "medium": "Systran/faster-whisper-medium",
+}
+ASR_MODEL_SIZE = _s.asr_model_size if _s.asr_model_size in ASR_MODEL_REPOS else "small"
+ASR_MODEL_SIZE_MB = {"tiny": 75, "base": 145, "small": 460, "medium": 1500}
 ASR_DEVICE = "cpu"
 ASR_COMPUTE = "int8"
 
-# faster-whisper 的 "small" 对应的权重仓库（用于离线就绪探测）
-ASR_MODEL_REPO = "Systran/faster-whisper-small"
+# 就绪探测必须跟着当前档位走，否则换成 tiny/base 后会误报「权重未就绪」。
+ASR_MODEL_REPO = ASR_MODEL_REPOS[ASR_MODEL_SIZE]
 # 这几个文件缺一个，faster-whisper 都会尝试联网补齐
 ASR_MODEL_FILES = ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt")
 
@@ -46,6 +57,9 @@ def get_model():
 
 
 def asr_available() -> bool:
+    """转写是否可用。ASR_ENABLED=0 时按未安装处理，前端麦克风据此置灰。"""
+    if not ASR_ENABLED:
+        return False
     try:
         import faster_whisper  # noqa: F401
         return True
@@ -57,7 +71,8 @@ def model_ready() -> bool:
     """权重是否已在本地缓存（离线可直接加载）。
 
     `asr_available()` 只说明包装了 —— 权重是首次 transcribe 才懒加载的
-    （约 460MB）。网络不通时下载失败会走 except 分支静默返回空文本，前端
+    （small 约 460MB，随 ASR_MODEL_SIZE 变化）。网络不通时下载失败会走 except
+    分支静默返回空文本，前端
     只看到「未识别出内容」，很难定位。状态接口必须把「没装包」和「装了但
     权重下不来」分开，否则麦克风按钮亮着却永远识别不出东西。
     """
@@ -364,7 +379,9 @@ def transcribe(data: bytes, language: str = "zh") -> dict[str, Any]:
 
     text = ""
     asr_error = ""
-    if not asr_available():
+    if not ASR_ENABLED:
+        asr_error = "语音转写已关闭（ASR_ENABLED=0），仅返回声学特征与语气"
+    elif not asr_available():
         asr_error = "未安装 faster-whisper（pip install faster-whisper）"
     elif x.size == 0:
         asr_error = "音频解码后为空"

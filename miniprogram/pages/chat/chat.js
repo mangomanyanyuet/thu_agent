@@ -147,7 +147,7 @@ Page({
 
     this.pushAgent(r.reply || '', {
       emotion: fmt.emotionLabel(r.emotion && r.emotion.primary_emotion),
-      stage: fmt.cbtLabel(r.cbt_stage),
+      stage: r.stage_label || fmt.cbtLabel(r.cbt_stage),
       latency: fmt.ms(r.latency_ms),
       channels: channels,
       channelList,
@@ -157,7 +157,7 @@ Page({
 
     this.setData({
       riskMeta: meta,
-      cbtStage: fmt.cbtLabel(r.cbt_stage),
+      cbtStage: r.stage_label || fmt.cbtLabel(r.cbt_stage),
       degraded: !!r.degraded,
       pendingReview: !!r.interrupted,
       suspendedReason: r.interrupt_reason || '',

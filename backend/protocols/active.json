@@ -1,0 +1,4 @@
+{
+  "active": "cbt_classic",
+  "note": "切换生效方案：改这个文件，或调用 POST /api/protocol/switch。下一轮对话生效。"
+}

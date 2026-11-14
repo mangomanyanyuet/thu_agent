@@ -276,6 +276,53 @@ def chat_stream(req: ChatRequest):
                                       "X-Accel-Buffering": "no"})
 
 
+# ------------------------------------------------------------------ 会谈方案（protocol）
+class ProtocolSwitchRequest(BaseModel):
+    id: str
+
+
+@app.get(f"{settings.api_prefix}/protocol")
+def get_protocol():
+    """只读：生效方案、阶段中文标签、可选方案列表与校验状态。"""
+    import protocol
+
+    p = protocol.active_protocol()
+    return {
+        **protocol.summary(p),
+        "status": protocol.active_status(),
+        "available": protocol.list_protocols(),
+    }
+
+
+@app.get(f"{settings.api_prefix}/protocol/{{pid}}")
+def get_protocol_detail(pid: str):
+    """只读：查看某个方案全文与校验结果，不改变生效方案。"""
+    import protocol
+
+    path = protocol.PROTOCOL_DIR / f"{pid}.json"
+    if not pid or pid.startswith("_") or not path.exists():
+        raise HTTPException(404, "方案不存在")
+    try:
+        cfg = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, f"方案文件不可读：{exc}")
+    ok, errors, warns = protocol.validate_protocol(cfg, expected_id=pid)
+    return {"id": pid, "valid": ok, "errors": errors,
+            "warnings": warns, "protocol": cfg}
+
+
+@app.post(f"{settings.api_prefix}/protocol/switch")
+def switch_protocol(req: ProtocolSwitchRequest, request: Request):
+    """切换生效方案（医生权限）；校验不通过则拒绝切换。"""
+    _require_doctor(request)
+    import protocol
+
+    try:
+        return protocol.set_active(req.id)
+    except Exception as exc:  # noqa: BLE001  方案文件异常一律转成 400
+        raise HTTPException(400, f"切换失败：{exc}")
+
+
 # ------------------------------------------------------------------ 日记 / 心情（豆包式改版）
 @app.post(f"{settings.api_prefix}/diary/generate")
 def diary_generate(req: DiaryGenerateRequest):
@@ -993,7 +1040,7 @@ def trace_events(request: Request, limit: int = 200, kind: str = ""):
     """结构化事件流（可观测层）。
 
     返回内存环形缓冲里的最近事件，供界面实时查看中间决策过程：
-    情绪融合、三通道判定、最终分级、状态转移、CBT 阶段、延迟。
+    情绪融合、三通道判定、最终分级、状态转移、会谈阶段与方案决策、延迟。
     """
     import tracer
 

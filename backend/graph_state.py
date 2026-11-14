@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 
 from config import get_settings
 from memory import context_budget_report
+from protocol import active_protocol, stage_label
 
 
 def merge_dict(a: dict[str, Any], b: dict[str, Any]) -> dict[str, Any]:
@@ -75,8 +76,11 @@ class AgentState(TypedDict, total=False):
     facts: dict[str, Any]
     last_fact_turn: int  # 上次事实抽取时的轮次，用于累积窗口（避免漏抽中间轮）
 
-    # ---------- CBT ----------
+    # ---------- 会谈方案（protocol）----------
+    # 阶段 id 由 backend/protocols/*.json 定义，不再受 CBTStage 枚举约束。
     cbt_stage: str
+    stage_turns: int      # 当前阶段已停留轮数，供方案 max_turns / 条件决策使用
+    protocol_id: str      # 本轮生效方案（写入轨迹，便于审计方案版本）
 
     # ---------- 输出 ----------
     reply: str
@@ -162,8 +166,20 @@ def assemble_system(state: AgentState) -> str:
     装配顺序与预算见报告 §5.1。安全区永远在最前面且不可省略。
     """
     s = get_settings()
-    level_name = ["none", "low", "moderate", "high", "imminent"][min(state.get("risk_level", 0), 4)]
+    level = min(state.get("risk_level", 0), 4)
+    level_name = ["none", "low", "moderate", "high", "imminent"][level]
     stage = state.get("cbt_stage", "none") or "none"
+
+    # 方案层只影响常规会谈：中/高风险分支不注入探索性的阶段目标，
+    # 避免与「危机时停止探索式提问」的红线冲突。
+    if level >= 2:
+        stage_desc = "（中/高风险分支，本轮不推进会谈阶段）"
+    else:
+        p = active_protocol()
+        st = (p.get("stages") or {}).get(stage) or {}
+        goal = st.get("goal") or CBT_STAGE_GUIDE.get(stage, "")
+        label = stage_label(p, stage) if st else CBT_STAGE_GUIDE.get(stage, stage)
+        stage_desc = f"{stage} - {label}：{goal}"
 
     txt = SYSTEM_TEMPLATE.format(
         risk_level=f"{level_name}（{'需危机干预' if level_name in ('high', 'imminent') else '常规'}）",
@@ -174,7 +190,7 @@ def assemble_system(state: AgentState) -> str:
         companion_history=state.get("companion_history", "（无）"),
         voice_summary=state.get("voice_summary") or "（本轮为文字输入）",
         scale_trend=state.get("scale_trend", "（无）"),
-        cbt_stage=f"{stage} - {CBT_STAGE_GUIDE.get(stage, '')}",
+        cbt_stage=stage_desc,
         rolling_summary=state.get("rolling_summary", "（无）"),
     )
 

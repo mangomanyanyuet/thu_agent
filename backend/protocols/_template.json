@@ -1,0 +1,53 @@
+{
+  "id": "my_protocol",
+  "name": "我的会谈方案",
+  "school": "（填写取向或理论基础）",
+  "version": "0.1.0",
+  "description": "给专家复制用的骨架。复制后重命名文件（去掉下划线前缀），并把 id 改成同名。字段含义见 docs/会谈方案编排说明.md。",
+  "entry": "opening",
+  "applies_to": ["cbt"],
+  "global_style": [
+    "先共情确认，再推进；一次只问一个问题。"
+  ],
+  "stages": {
+    "opening": {
+      "label": "开场与关系",
+      "goal": "说明这次可以聊什么，确认用户此刻是否愿意开始。",
+      "topics": ["今天想先聊什么", "此刻的状态"],
+      "prompts": ["用一句邀请式的话开场，把主导权交给用户。"],
+      "avoid": ["立刻分析", "连续提问"],
+      "next": "explore",
+      "max_turns": 2
+    },
+    "explore": {
+      "label": "主题探索",
+      "goal": "围绕用户带来的主题，按本流派的关注点展开。",
+      "topics": ["这件事里最在意的部分", "过去有没有不同的时刻"],
+      "prompts": ["跟随用户的用词，不引入新术语。"],
+      "avoid": ["替用户解释原因", "评价对错"],
+      "rules": {
+        "stay_if": [
+          { "field": "emotion.intensity", "op": ">=", "value": 8 }
+        ],
+        "goto": [
+          {
+            "when": { "field": "emotion.valence", "op": "<=", "value": -0.6 },
+            "to": "opening",
+            "reason": "情绪明显转负时回到关系与稳定，先不继续探索"
+          }
+        ]
+      },
+      "next": "wrapup",
+      "max_turns": 3
+    },
+    "wrapup": {
+      "label": "小结",
+      "goal": "小结并邀请反馈，之后回到开场开启下一轮。",
+      "topics": ["这次最有帮助的一点", "下次想从哪里开始"],
+      "prompts": ["两三句短句小结，再问一句反馈。"],
+      "avoid": ["长篇总结", "替用户评价疗效"],
+      "next": "opening",
+      "max_turns": 2
+    }
+  }
+}

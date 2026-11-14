@@ -252,8 +252,12 @@ export default function ChatView({ userId, sessionId, ensureSession, refresh, on
                 </div>
               )}
               <div className="kv">
-                <span>CBT 阶段</span>
-                <strong>{STAGE_LABEL[live.cbt_stage] || live.cbt_stage || '-'}</strong>
+                <span>会谈方案</span>
+                <strong>{live.protocol_name || '默认方案'}</strong>
+              </div>
+              <div className="kv">
+                <span>会谈阶段</span>
+                <strong>{live.stage_label || STAGE_LABEL[live.cbt_stage] || live.cbt_stage || '-'}</strong>
               </div>
               <div className="kv">
                 <span>上下文占用</span>

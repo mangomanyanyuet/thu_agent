@@ -22,7 +22,8 @@ import uuid
 from typing import Any
 
 from config import get_settings
-from graph_state import CBT_NEXT, AgentState, assemble_system, context_budget_report
+from graph_state import AgentState, assemble_system, context_budget_report
+from protocol import active_protocol, active_status, decide_next, stage_block, stage_label
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 from langgraph.types import Command, interrupt
@@ -123,7 +124,8 @@ preferences(沟通偏好), personality_traits(人格特质), coping_style(应对
 
 只抽取原文明确提到的内容，没有就给空数组。宁可少抽，不可错抽。"""
 
-CBT_SYS_EXTRA = "\n当前 CBT 阶段目标：{guide}\n按此目标推进，一次只问一个问题。"
+# 会谈阶段的目标与话术由 backend/protocols/*.json 声明，见 protocol.stage_block()。
+# 这里不再硬编码 CBT 阶段提示词；CBT_NEXT / CBT_STAGE_GUIDE 仅作为内置回落基线保留。
 
 
 def _llm_messages(state: AgentState, n: int | None = None) -> list[dict[str, str]]:
@@ -579,13 +581,20 @@ def moderate_node(state: AgentState) -> dict[str, Any]:
 
 
 def cbt_node(state: AgentState) -> dict[str, Any]:
-    """轻/无风险：CBT 会谈流程，按阶段推进。"""
-    from llm import complete
-    from graph_state import CBT_STAGE_GUIDE
+    """轻/无风险：按生效会谈方案的主题与目标推进一轮。
 
-    stage = state.get("cbt_stage") or CBTStage.none.value
-    guide = CBT_STAGE_GUIDE.get(stage, "")
-    extra = CBT_SYS_EXTRA.format(guide=guide)
+    方案只装配常规会谈分支；风险判定 / 危机协议 / 人工挂起不经过这里。
+    阶段转移是确定性的（顺序 + 条件 + 轮次上限），LLM 只负责生成回复。
+    """
+    from llm import complete
+
+    p = active_protocol()
+    stage = state.get("cbt_stage") or p["entry"]
+    if stage not in p["stages"]:
+        # 切换方案或历史 checkpoint 里残留旧阶段名时，安全回落到方案入口
+        stage = p["entry"]
+
+    extra = "\n" + stage_block(p, stage)
     if state.get("modality_inconsistent"):
         extra += "\n注意：观察到用户自述偏正面但表情/语音偏负面，请更温和谨慎地探询，不要直接指出矛盾。"
 
@@ -596,13 +605,25 @@ def cbt_node(state: AgentState) -> dict[str, Any]:
 
     import tracer
 
-    tracer.cbt_stage(state["session_id"], stage,
-                     CBT_NEXT.get(stage, CBTStage.affect_labeling.value),
-                     turn=state.get("turn", -1))
+    signals = {
+        "emotion": state.get("emotion") or {},
+        "risk_level": final_level(state),
+        "turn": state.get("turn", -1),
+        "stage_turns": int(state.get("stage_turns") or 0),
+        "modality_inconsistent": bool(state.get("modality_inconsistent")),
+    }
+    nxt, why = decide_next(p, stage, signals, signals["stage_turns"])
+    tracer.cbt_stage(state["session_id"], stage, nxt, turn=signals["turn"])
+    tracer.log("protocol.decision",
+               f"方案 {p['id']}：{stage} → {nxt}（{why}）",
+               session_id=state["session_id"], turn=signals["turn"],
+               protocol=p["id"], **{"from": stage, "to": nxt}, reason=why)
     return {
         "reply": reply,
         "crisis_mode": False,
-        "cbt_stage": CBT_NEXT.get(stage, CBTStage.affect_labeling.value),
+        "cbt_stage": nxt,
+        "stage_turns": signals["stage_turns"] + 1 if nxt == stage else 0,
+        "protocol_id": p["id"],
     }
 
 
@@ -843,6 +864,12 @@ def run_turn(user_id: str, session_id: str, user_text: str,
                     crisis=bool(out.get("crisis_mode")),
                     degraded=was_degraded())
 
+    # 方案元数据随每轮返回：SSE 的 meta 与小程序同步接口都自动带上，
+    # 前端不必为新阶段 id 再维护一份硬编码中文标签。
+    p = active_protocol()
+    status = active_status()
+    current_stage = out.get("cbt_stage", "")
+
     return {
         "latency_ms": latency_ms,
         "reply": out.get("reply", ""),
@@ -858,7 +885,11 @@ def run_turn(user_id: str, session_id: str, user_text: str,
             "scale": out.get("risk_scale", {}),
         },
         "emotion": out.get("emotion", {}),
-        "cbt_stage": out.get("cbt_stage", ""),
+        "cbt_stage": current_stage,
+        "stage_label": stage_label(p, current_stage) if current_stage else "",
+        "protocol_id": p["id"],
+        "protocol_name": p["name"],
+        "protocol_fallback": bool(status.get("fallback")),
         "crisis_mode": out.get("crisis_mode", False),
         "hotlines": out.get("hotlines", []),
         "context_stats": out.get("context_stats", {}),

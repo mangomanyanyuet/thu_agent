@@ -699,7 +699,7 @@ async function send(text){
     S.msgs.push({
       role:'agent', text:r.reply||'', open:false,
       emotion: EMOTION[r.emotion&&r.emotion.primary_emotion]||'',
-      stage: CBT[r.cbt_stage]||'',
+      stage: r.stage_label || CBT[r.cbt_stage]||'',
       latency: r.latency_ms? (r.latency_ms/1000).toFixed(1)+'s':'',
       channelList: Object.keys(r.channels||{}).map(k=>{
         const c=r.channels[k]||{}, lv=+c.level||0

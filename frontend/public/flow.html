@@ -188,7 +188,7 @@ const PANES = [
   {
     id:'cbt', tab:'④ CBT 阶段',
     title:'CBT 会谈阶段流转',
-    desc:'每轮推进一个阶段，<b>追问深度不超过两层</b>（PRD §6.2），避免 5 分钟内话题过散、造成压迫感。',
+    desc:'此图仅描述内置默认方案 <code>cbt_classic</code>。生效方案由 <code>backend/protocols/active.json</code> 指定，阶段主题、顺序与话术可在方案文件中编排（见 <code>docs/会谈方案编排说明.md</code>）；当前阶段标签由 <code>/api/protocol</code> 返回。',
     code:`stateDiagram-v2
     direction LR
     none --> affect_labeling : 情绪命名
